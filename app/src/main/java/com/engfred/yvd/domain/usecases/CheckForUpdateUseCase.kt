@@ -13,7 +13,7 @@ import javax.inject.Inject
 
 private const val TAG = "CheckForUpdateUseCase"
 private const val OWNER = "EngFred"
-private const val REPO  = "YV-Downloader" // TODO: Update this if your repo name is different!
+private const val REPO  = "YV-Downloader"
 
 class CheckForUpdateUseCase @Inject constructor() {
 
@@ -90,8 +90,7 @@ class CheckForUpdateUseCase @Inject constructor() {
 
         return exactMatch ?: armeabiMatch ?: anyApk ?: fallbackHtmlUrl
     }
-
-    private fun isNewerVersion(latest: String, current: String): Boolean {
+    fun isNewerVersion(latest: String, current: String): Boolean {
         val l = latest.split(".").map  { it.toIntOrNull() ?: 0 }
         val c = current.split(".").map { it.toIntOrNull() ?: 0 }
         val len = maxOf(l.size, c.size)

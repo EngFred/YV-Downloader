@@ -9,25 +9,27 @@ import androidx.activity.viewModels
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.lifecycleScope
 import com.engfred.yvd.domain.model.AppTheme
+import com.engfred.yvd.domain.model.UpdateInfo
+import com.engfred.yvd.domain.usecases.CheckForUpdateUseCase
 import com.engfred.yvd.service.FloatingBubbleService
 import com.engfred.yvd.ui.MainScreen
+import com.engfred.yvd.ui.components.UpdateDialog
 import com.engfred.yvd.ui.home.HomeViewModel
 import com.engfred.yvd.ui.onboarding.OnboardingScreen
-import com.engfred.yvd.ui.theme.YVDTheme
 import com.engfred.yvd.ui.splash.AnimatedSplashScreen
+import com.engfred.yvd.ui.theme.YVDTheme
 import com.engfred.yvd.util.AppLifecycleTracker
 import com.engfred.yvd.util.BubblePermissionHelper
 import com.engfred.yvd.util.PreferencesHelper
 import com.engfred.yvd.util.UrlValidator
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -35,12 +37,13 @@ class MainActivity : ComponentActivity() {
     private val mainViewModel: MainViewModel by viewModels()
     private val homeViewModel: HomeViewModel by viewModels()
 
+    @Inject lateinit var checkForUpdateUseCase: CheckForUpdateUseCase
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Keeps the system splash on screen until the theme is determined
         splashScreen.setKeepOnScreenCondition {
             mainViewModel.theme.value == null
         }
@@ -54,20 +57,49 @@ class MainActivity : ComponentActivity() {
                     else -> isSystemInDarkTheme()
                 }
 
-                // Check onboarding status
                 var onboardingDone by remember {
                     mutableStateOf(PreferencesHelper.isOnboardingDone(this@MainActivity))
                 }
 
-                // State to control our custom animated splash screen
                 var showSplash by remember { mutableStateOf(true) }
 
+                // Update Dialog States
+                var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+                var showUpdateDialog by remember { mutableStateOf(false) }
+
+                LaunchedEffect(Unit) {
+                    // 1. Instantly check cached updates using the shared UseCase helper
+                    val cachedInfo = PreferencesHelper.getCachedUpdateInfo(this@MainActivity)
+                    if (cachedInfo != null && checkForUpdateUseCase.isNewerVersion(cachedInfo.latestVersion, BuildConfig.VERSION_NAME)) {
+                        updateInfo = cachedInfo
+                        showUpdateDialog = true
+                    }
+
+                    // 2. Silently refresh cache via GitHub API if older than 12 hours
+                    val lastCheck = PreferencesHelper.getLastUpdateCheck(this@MainActivity)
+                    val now = System.currentTimeMillis()
+                    val twelveHoursMs = 12L * 60 * 60 * 1000
+
+                    if (now - lastCheck > twelveHoursMs) {
+                        lifecycleScope.launch {
+                            val info = checkForUpdateUseCase(BuildConfig.VERSION_NAME)
+                            PreferencesHelper.setLastUpdateCheck(this@MainActivity, now)
+                            if (info != null) {
+                                PreferencesHelper.saveCachedUpdateInfo(this@MainActivity, info)
+                                if (updateInfo?.latestVersion != info.latestVersion) {
+                                    updateInfo = info
+                                    showUpdateDialog = true
+                                }
+                            }
+                        }
+                    }
+                }
+
                 YVDTheme(darkTheme = useDarkTheme) {
-                    // Smooth crossfade transition between Splash and the App
                     Crossfade(
                         targetState = showSplash,
                         label = "SplashTransition",
-                        animationSpec = tween(durationMillis = 600) // Beautiful 600ms dissolve
+                        animationSpec = tween(durationMillis = 600)
                     ) { isSplashActive ->
                         if (isSplashActive) {
                             AnimatedSplashScreen(
@@ -86,21 +118,27 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+
+                    val currentUpdateInfo = updateInfo
+                    if (showUpdateDialog && currentUpdateInfo != null) {
+                        UpdateDialog(
+                            updateInfo = currentUpdateInfo,
+                            onDownload = { showUpdateDialog = false },
+                            onRemindLater = { showUpdateDialog = false },
+                            onDismiss = { showUpdateDialog = false }
+                        )
+                    }
                 }
             }
         }
 
         if (BubblePermissionHelper.canDrawOverlays(this)) {
-            ContextCompat.startForegroundService(
-                this, Intent(this, FloatingBubbleService::class.java)
-            )
+            ContextCompat.startForegroundService(this, Intent(this, FloatingBubbleService::class.java))
         } else {
             android.app.AlertDialog.Builder(this)
                 .setTitle("Enable Floating Bubble")
                 .setMessage("YV Downloader uses a floating bubble so you can quickly return to the app after copying a YouTube link. Please enable 'Appear on top' on the next screen.")
-                .setPositiveButton("Grant Permission") { _, _ ->
-                    BubblePermissionHelper.openOverlaySettings(this)
-                }
+                .setPositiveButton("Grant Permission") { _, _ -> BubblePermissionHelper.openOverlaySettings(this) }
                 .setNegativeButton("Not Now", null)
                 .show()
         }
@@ -113,9 +151,7 @@ class MainActivity : ComponentActivity() {
         AppLifecycleTracker.isInForeground = true
 
         if (BubblePermissionHelper.canDrawOverlays(this)) {
-            ContextCompat.startForegroundService(
-                this, Intent(this, FloatingBubbleService::class.java)
-            )
+            ContextCompat.startForegroundService(this, Intent(this, FloatingBubbleService::class.java))
         }
 
         startService(Intent(this, FloatingBubbleService::class.java).apply {
