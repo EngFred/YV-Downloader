@@ -6,6 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -20,6 +22,7 @@ import com.engfred.yvd.ui.MainScreen
 import com.engfred.yvd.ui.home.HomeViewModel
 import com.engfred.yvd.ui.onboarding.OnboardingScreen
 import com.engfred.yvd.ui.theme.YVDTheme
+import com.engfred.yvd.ui.splash.AnimatedSplashScreen
 import com.engfred.yvd.util.AppLifecycleTracker
 import com.engfred.yvd.util.BubblePermissionHelper
 import com.engfred.yvd.util.PreferencesHelper
@@ -37,6 +40,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Keeps the system splash on screen until the theme is determined
         splashScreen.setKeepOnScreenCondition {
             mainViewModel.theme.value == null
         }
@@ -50,21 +54,37 @@ class MainActivity : ComponentActivity() {
                     else -> isSystemInDarkTheme()
                 }
 
-                // Check onboarding once, driven by remember so it survives recomposition
+                // Check onboarding status
                 var onboardingDone by remember {
                     mutableStateOf(PreferencesHelper.isOnboardingDone(this@MainActivity))
                 }
 
+                // State to control our custom animated splash screen
+                var showSplash by remember { mutableStateOf(true) }
+
                 YVDTheme(darkTheme = useDarkTheme) {
-                    if (!onboardingDone) {
-                        OnboardingScreen(
-                            onFinished = {
-                                PreferencesHelper.setOnboardingDone(this@MainActivity)
-                                onboardingDone = true
+                    // Smooth crossfade transition between Splash and the App
+                    Crossfade(
+                        targetState = showSplash,
+                        label = "SplashTransition",
+                        animationSpec = tween(durationMillis = 600) // Beautiful 600ms dissolve
+                    ) { isSplashActive ->
+                        if (isSplashActive) {
+                            AnimatedSplashScreen(
+                                onFinished = { showSplash = false }
+                            )
+                        } else {
+                            if (!onboardingDone) {
+                                OnboardingScreen(
+                                    onFinished = {
+                                        PreferencesHelper.setOnboardingDone(this@MainActivity)
+                                        onboardingDone = true
+                                    }
+                                )
+                            } else {
+                                MainScreen(homeViewModel = homeViewModel)
                             }
-                        )
-                    } else {
-                        MainScreen(homeViewModel = homeViewModel)
+                        }
                     }
                 }
             }
