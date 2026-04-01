@@ -17,6 +17,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <queries>
         <package android:name="com.google.android.youtube" />
     </queries>
@@ -41,6 +44,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Receives URLs shared from YouTube or any app -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
 
@@ -70,6 +80,16 @@
             android:foregroundServiceType="dataSync"
             android:exported="false"
             tools:node="merge" />
+
+        <service
+            android:name=".service.FloatingBubbleService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_TYPE"
+                android:value="This service maintains a floating bubble overlay and monitors the clipboard to allow users to quickly return to the app and process copied YouTube links." />
+        </service>
 
         <receiver android:name=".receiver.CancelReceiver" android:exported="false">
             <intent-filter>

@@ -371,6 +371,30 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Called when the user returns to the app via the floating bubble, either on cold start
+     * ([MainActivity.onCreate]) or while the app is already running ([MainActivity.onNewIntent]).
+     *
+     * Populates the URL input field and immediately kicks off metadata loading — the user
+     * should land on the app and see the video card loading without any manual action.
+     */
+    fun handleIncomingUrl(url: String) {
+        _state.update {
+            it.copy(
+                urlInput = url,
+                urlError = null,
+                videoMetadata = null,
+                downloadComplete = false,
+                downloadFailed = false,
+                downloadedFile = null,
+                isDownloading = false,
+                downloadProgress = 0f,
+                error = null
+            )
+        }
+        loadVideoInfo(url)
+    }
+
     fun clearError() = _state.update { it.copy(error = null) }
 
     // ─── Constants ────────────────────────────────────────────────────────────

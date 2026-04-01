@@ -27,16 +27,19 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.engfred.yvd.ui.downloads.DownloadsScreen
 import com.engfred.yvd.ui.home.HomeScreen
+import com.engfred.yvd.ui.home.HomeViewModel
 
 @Composable
-fun MainScreen() {
+fun MainScreen(homeViewModel: HomeViewModel) {
     val navController = rememberNavController()
 
-    Column{
+    Column {
         NavHost(
             navController = navController,
             startDestination = "home",
-            modifier = Modifier.background(MaterialTheme.colorScheme.background).weight(1f)
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.background)
+                .weight(1f)
         ) {
             composable(
                 route = "home",
@@ -47,7 +50,7 @@ fun MainScreen() {
                     slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(400)) + fadeOut(tween(400))
                 }
             ) {
-                HomeScreen()
+                HomeScreen(viewModel = homeViewModel)
             }
 
             composable(
@@ -84,9 +87,7 @@ fun MainScreen() {
                 colors = navItemColors,
                 onClick = {
                     navController.navigate("home") {
-                        popUpTo(navController.graph.findStartDestination().id) {
-                            saveState = true
-                        }
+                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                         launchSingleTop = true
                         restoreState = true
                     }
@@ -99,9 +100,7 @@ fun MainScreen() {
                 colors = navItemColors,
                 onClick = {
                     navController.navigate("downloads") {
-                        popUpTo(navController.graph.findStartDestination().id) {
-                            saveState = true
-                        }
+                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                         launchSingleTop = true
                         restoreState = true
                     }
