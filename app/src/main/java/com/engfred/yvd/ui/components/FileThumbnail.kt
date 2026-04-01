@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -18,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -52,7 +54,7 @@ fun FileThumbnail(
     }
 
     Box(
-        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
+        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
         contentAlignment = Alignment.Center
     ) {
         if (isLoaded && thumbnailData != null) {
@@ -66,13 +68,23 @@ fun FileThumbnail(
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            // Fallback icons depending on type
-            Icon(
-                imageVector = if (isAudio) Icons.Rounded.Audiotrack else Icons.Rounded.PlayArrow,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(12.dp).size(36.dp)
-            )
+            // Premium Fallback State
+            val iconTint = if (isAudio) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(iconTint.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isAudio) Icons.Rounded.Audiotrack else Icons.Rounded.PlayArrow,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }

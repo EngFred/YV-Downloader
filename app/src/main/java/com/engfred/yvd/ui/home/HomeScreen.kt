@@ -5,64 +5,31 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ContentPaste
-import androidx.compose.material.icons.rounded.SettingsBrightness
-import androidx.compose.material.icons.rounded.SmartDisplay
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.engfred.yvd.ui.components.ConfirmationDialog
-import com.engfred.yvd.ui.components.DownloadProgressCard
-import com.engfred.yvd.ui.components.FormatSelectionSheet
-import com.engfred.yvd.ui.components.ThemeSelectionDialog
-import com.engfred.yvd.ui.components.VideoCard
+import com.engfred.yvd.ui.components.*
 import com.engfred.yvd.util.openYoutube
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,35 +45,24 @@ fun HomeScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // ── Permission launcher ────────────────────────────────────────────────
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) {
-            Toast.makeText(
-                context,
-                "Enable notifications to track downloads in the background",
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(context, "Enable notifications to track downloads", Toast.LENGTH_LONG).show()
         }
     }
 
-    // Request notification permission once on first compose (Android 13+).
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
-    // Surface error messages as snackbars.
     LaunchedEffect(state.error) {
         state.error?.let { message ->
             snackbarHostState.showSnackbar(message = message, duration = SnackbarDuration.Long)
             viewModel.clearError()
         }
     }
-
-    // ── Dialogs ────────────────────────────────────────────────────────────
 
     if (state.isCancelDialogVisible) {
         ConfirmationDialog(
@@ -126,58 +82,54 @@ fun HomeScreen(
         )
     }
 
-    // ── Root layout via Scaffold ───────────────────────────────────────────
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            // Badge shows count of active/queued downloads (from all sessions).
             BadgedBox(
+                modifier = Modifier.padding(bottom = 88.dp), // FIX 3: Pushes the FAB up so it doesn't hide behind the custom Nav Pill
                 badge = {
                     if (state.activeDownloadCount > 1) {
-                        Badge {
-                            Text(
-                                text = state.activeDownloadCount.toString(),
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
+                        Badge(containerColor = MaterialTheme.colorScheme.primary) { Text(state.activeDownloadCount.toString()) }
                     }
                 }
             ) {
-                ExtendedFloatingActionButton(
+                FloatingActionButton(
                     onClick = { openYoutube(context) },
-                    containerColor = Color(0xFFFF0000),
-                    contentColor = Color.White
+                    containerColor = Color(0xFFFF0000), // YouTube Red
+                    contentColor = Color.White,
+                    shape = CircleShape,
+                    modifier = Modifier.shadow(8.dp, CircleShape)
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.SmartDisplay,
-                        modifier = Modifier.size(32.dp),
-                        contentDescription = "Open YouTube"
-                    )
+                    Icon(Icons.Rounded.SmartDisplay, contentDescription = "Open YouTube", modifier = Modifier.size(28.dp))
                 }
             }
         },
         topBar = {
             TopAppBar(
-                title = { Text("YV Downloader") },
+                title = {
+                    Text("YV Downloader", fontWeight = FontWeight.Bold)
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = Color.White,
-                    actionIconContentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                    actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                 ),
                 actions = {
-                    IconButton(onClick = { viewModel.showThemeDialog() }) {
-                        Icon(
-                            imageVector = Icons.Rounded.SettingsBrightness,
-                            contentDescription = "Change theme",
-                            modifier = Modifier.size(26.dp)
-                        )
+                    // FIX 1: Replaced the clunky icon with a premium soft circular Palette button
+                    IconButton(
+                        onClick = { viewModel.showThemeDialog() },
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    ) {
+                        Icon(Icons.Rounded.Palette, contentDescription = "Change theme", modifier = Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             )
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -186,112 +138,123 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Premium Custom Input Field
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(8.dp, RoundedCornerShape(16.dp), spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                TextField(
+                    value = state.urlInput,
+                    onValueChange = { viewModel.onUrlInputChanged(it) },
+                    placeholder = { Text("Paste YouTube link here...", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent
+                    ),
+                    trailingIcon = {
+                        Row {
+                            if (state.urlInput.isNotBlank()) {
+                                IconButton(onClick = { viewModel.onUrlInputChanged("") }) {
+                                    Icon(Icons.Rounded.Clear, contentDescription = "Clear")
+                                }
+                            }
+                            IconButton(onClick = {
+                                val clip = clipboardManager.getText()?.text?.toString()
+                                if (!clip.isNullOrBlank()) {
+                                    keyboardController?.hide()
+                                    viewModel.loadVideoInfo(clip)
+                                }
+                            }) {
+                                Icon(Icons.Rounded.ContentPaste, contentDescription = "Paste", tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                )
+            }
+
+            AnimatedVisibility(visible = state.urlError != null) {
+                Text(
+                    text = state.urlError ?: "",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp, start = 8.dp).fillMaxWidth()
+                )
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
-            // ── URL input ─────────────────────────────────────────────────
-            OutlinedTextField(
-                value = state.urlInput,
-                onValueChange = { viewModel.onUrlInputChanged(it) },
-                label = { Text("Paste YouTube link") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                isError = state.urlError != null,
-                supportingText = {
-                    // Inline validation error — shown below the field, not as a snackbar.
-                    AnimatedVisibility(visible = state.urlError != null) {
-                        Text(
-                            text = state.urlError ?: "",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                },
-                trailingIcon = {
-                    IconButton(onClick = {
-                        val clip = clipboardManager.getText()?.text?.toString()
-                        if (!clip.isNullOrBlank()) {
-                            keyboardController?.hide()
-                            viewModel.loadVideoInfo(clip)
-                        }
-                    }) {
-                        Icon(Icons.Rounded.ContentPaste, contentDescription = "Paste from clipboard")
-                    }
-                }
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // ── "Get Video Info" button — hidden once metadata is loaded ──
             AnimatedVisibility(
-                visible = state.videoMetadata == null && !state.isDownloading &&
-                        !state.downloadComplete && !state.downloadFailed
+                visible = state.videoMetadata == null && !state.isDownloading && !state.downloadComplete && !state.downloadFailed
             ) {
+                // FIX 2: Removed custom .shadow() modifier and used proper Button elevation to fix UI glitch
                 Button(
                     onClick = {
                         keyboardController?.hide()
                         viewModel.loadVideoInfo(state.urlInput)
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(contentColor = Color.White),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp, pressedElevation = 2.dp),
                     enabled = !state.isLoading && state.urlInput.isNotBlank()
                 ) {
                     if (state.isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text("Loading…")
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Fetching Magic...", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     } else {
-                        Text("Get Video Info")
+                        Text("Get Video Info", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
 
-            // ── Empty / instruction state ─────────────────────────────────
+            // Beautiful Empty State
             AnimatedVisibility(
-                visible = state.videoMetadata == null && !state.isDownloading &&
-                        !state.downloadComplete && !state.downloadFailed && !state.isLoading,
-                enter = fadeIn(),
-                exit = fadeOut()
+                visible = state.videoMetadata == null && !state.isDownloading && !state.downloadComplete && !state.downloadFailed && !state.isLoading,
+                enter = fadeIn(), exit = fadeOut()
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 32.dp, horizontal = 8.dp)
-                        .background(
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
-                            shape = MaterialTheme.shapes.medium
-                        )
-                        .padding(24.dp)
+                        .padding(top = 48.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(32.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.ContentPaste,
-                        contentDescription = null,
-                        modifier = Modifier.size(44.dp),
-                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-                    )
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Rounded.RocketLaunch, contentDescription = null, modifier = Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Text("Ready to Download?", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "How to Download",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "1. Tap the red button to open YouTube\n" +
-                                "2. Copy a video link\n" +
-                                "3. Paste it above and tap Get Video Info",
+                        "Tap the red button to open YouTube, grab a link, and paste it above to get started.",
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 22.sp
                     )
                 }
             }
 
-            // ── Video metadata card ───────────────────────────────────────
             state.videoMetadata?.let { metadata ->
                 Spacer(modifier = Modifier.height(16.dp))
                 VideoCard(
@@ -301,14 +264,9 @@ fun HomeScreen(
                 )
             }
 
-            // ── Download progress / result card ───────────────────────────
-            AnimatedVisibility(
-                visible = state.isDownloading || state.downloadComplete || state.downloadFailed,
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
+            AnimatedVisibility(visible = state.isDownloading || state.downloadComplete || state.downloadFailed) {
                 Column {
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Spacer(modifier = Modifier.height(24.dp))
                     DownloadProgressCard(
                         statusText = state.downloadStatusText,
                         progress = state.downloadProgress,
@@ -323,13 +281,10 @@ fun HomeScreen(
                     )
                 }
             }
-
-            // Extra bottom padding so content isn't obscured by the FAB.
-            Spacer(modifier = Modifier.height(96.dp))
+            Spacer(modifier = Modifier.height(120.dp)) // Extra space for the new floating nav bar
         }
     }
 
-    // ── Format selection bottom sheet ──────────────────────────────────────
     if (state.isFormatDialogVisible && state.videoMetadata != null) {
         FormatSelectionSheet(
             metadata = state.videoMetadata!!,

@@ -1,7 +1,6 @@
 package com.engfred.yvd.ui.onboarding
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -42,13 +41,13 @@ fun OnboardingScreen(
             icon = Icons.Rounded.Download,
             iconTint = Color(0xFFEF5350),
             title = "Welcome to YV Downloader",
-            description = "Download YouTube videos and audio in any format, straight to your device. Fast, simple, and free."
+            description = "Download YouTube videos and audio in any format, straight to your device. Fast, simple, and free.😉"
         ),
         OnboardingPage(
             icon = Icons.Rounded.SmartDisplay,
             iconTint = Color(0xFFFF0000),
             title = "Getting a YouTube Link",
-            description = "Three easy ways:\n\n" +
+            description = "Three easy ways:😌👌🏾\n\n" +
                     "① Tap the red button → opens YouTube → copy a link → return to app — it auto-loads.\n\n" +
                     "② In YouTube, tap Share → select YV Downloader — done.\n\n" +
                     "③ Manually paste any YouTube link into the field."
@@ -60,6 +59,12 @@ fun OnboardingScreen(
             description = "Once the video loads, tap the Download button to pick your format.\n\n" +
                     "Choose video quality (1080p, 720p…) or audio only (MP3).\n\n" +
                     "Downloads run in the background — you'll get a notification when done."
+        ),
+        OnboardingPage(
+            icon = Icons.Rounded.Code,
+            iconTint = Color(0xFF2196F3),
+            title = "Built by Engineer Fred",
+            description = "Hey! 👋🏾 I created YV Downloader to make saving your favorite youtube videos & audios effortless.\n\nEnjoying the app? Share it with friends! Got feedback? I'd love to hear it. Anyways I think I talk much, Now… let’s download something! 😄🤸‍♂️"
         )
     )
 
@@ -70,6 +75,7 @@ fun OnboardingScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .systemBarsPadding() // FIX: Adds spacing for nav bar and status bar
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),

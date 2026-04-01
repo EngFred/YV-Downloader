@@ -50,12 +50,12 @@ class MainActivity : ComponentActivity() {
                     else -> isSystemInDarkTheme()
                 }
 
-                YVDTheme(darkTheme = useDarkTheme) {
-                    // Check onboarding once, driven by remember so it survives recomposition
-                    var onboardingDone by remember {
-                        mutableStateOf(PreferencesHelper.isOnboardingDone(this@MainActivity))
-                    }
+                // Check onboarding once, driven by remember so it survives recomposition
+                var onboardingDone by remember {
+                    mutableStateOf(PreferencesHelper.isOnboardingDone(this@MainActivity))
+                }
 
+                YVDTheme(darkTheme = useDarkTheme) {
                     if (!onboardingDone) {
                         OnboardingScreen(
                             onFinished = {
@@ -70,7 +70,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // In MainActivity.onCreate()
         if (BubblePermissionHelper.canDrawOverlays(this)) {
             ContextCompat.startForegroundService(
                 this, Intent(this, FloatingBubbleService::class.java)
@@ -86,7 +85,6 @@ class MainActivity : ComponentActivity() {
                 .show()
         }
 
-        // Handle URL from Share sheet (e.g. YouTube → Share → YV Downloader)
         handleIncomingIntent(intent)
     }
 
@@ -109,14 +107,12 @@ class MainActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus) return
 
-        // Window now truly has focus — clipboard access is guaranteed at this point.
-        // Auto-load if user copied a YouTube link while away (e.g. in YouTube app).
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
         val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString()?.trim()
         if (
             !clip.isNullOrBlank() &&
             UrlValidator.isValidYouTubeUrl(UrlValidator.sanitize(clip)) &&
-            clip != homeViewModel.state.value.urlInput  // don't reload same URL twice
+            clip != homeViewModel.state.value.urlInput
         ) {
             homeViewModel.handleIncomingUrl(clip)
         }
@@ -132,11 +128,6 @@ class MainActivity : ComponentActivity() {
         handleIncomingIntent(intent)
     }
 
-    /**
-     * Handles URLs arriving from two sources:
-     * 1. Share sheet — user taps Share in YouTube and picks this app (ACTION_SEND)
-     * 2. Direct deep link if needed in future (ACTION_VIEW)
-     */
     private fun handleIncomingIntent(intent: Intent?) {
         if (intent == null) return
         when (intent.action) {

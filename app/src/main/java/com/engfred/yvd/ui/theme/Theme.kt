@@ -39,17 +39,15 @@ fun YVDTheme(
         SideEffect {
             val window = (view.context as Activity).window
 
-            // 1. Force the system bars to be transparent (letting content/scrim show through)
+            // Force the system bars to be transparent (letting content/scrim show through)
             window.statusBarColor = Color.Transparent.toArgb()
-
-            // This ensures the nav bar background is effectively "dark" (transparent on black usually)
             window.navigationBarColor = Color.Transparent.toArgb()
 
             val insetsController = WindowCompat.getInsetsController(window, view)
 
-            // false = "Not Light" = Dark Background -> White Icons
-            insetsController.isAppearanceLightStatusBars = false
-            insetsController.isAppearanceLightNavigationBars = false
+            // Let the system handle icon colors based on the theme
+            insetsController.isAppearanceLightStatusBars = !darkTheme
+            insetsController.isAppearanceLightNavigationBars = !darkTheme
         }
     }
 
