@@ -67,9 +67,8 @@ class MainActivity : ComponentActivity() {
                 var showUpdateDialog by remember { mutableStateOf(false) }
 
                 LaunchedEffect(Unit) {
-
 //                    // 🔴 MOCK UPDATE FOR TESTING🔴
-//                    delay(1000) // Slight delay so it pops up after splash screen
+//                    delay(1000)
 //                    updateInfo = UpdateInfo(
 //                        latestVersion = "9.9.9",
 //                        releaseNotes = "🚀 Massive UI/UX Redesign!\n✨ Added floating navigation bar.\n😎 Premium glassmorphism effects.\n🐛 Fixed minor bugs under the hood.",
@@ -79,7 +78,7 @@ class MainActivity : ComponentActivity() {
 //                    showUpdateDialog = true
 //                    // 🔴 ----------------------- 🔴
 
-                    // 1. Instantly check cached updates using the shared UseCase helper
+                    // 1. Instantly check cached updates
                     val cachedInfo = PreferencesHelper.getCachedUpdateInfo(this@MainActivity)
                     if (cachedInfo != null && checkForUpdateUseCase.isNewerVersion(cachedInfo.latestVersion, BuildConfig.VERSION_NAME)) {
                         updateInfo = cachedInfo
@@ -122,6 +121,9 @@ class MainActivity : ComponentActivity() {
                                     onFinished = {
                                         PreferencesHelper.setOnboardingDone(this@MainActivity)
                                         onboardingDone = true
+                                        // Show the bubble permission dialog only AFTER
+                                        // the user completes onboarding for the very first time.
+                                        showBubblePermissionDialogIfNeeded()
                                     }
                                 )
                             } else {
@@ -143,30 +145,35 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Only show the permission dialog if overlay permission hasn't been granted yet.
-        // Do NOT start the FloatingBubbleService here — it should only start when the user
-        // taps the YouTube FAB (handled inside openYoutube() via ACTION_SHOW).
-        if (!BubblePermissionHelper.canDrawOverlays(this)) {
-            android.app.AlertDialog.Builder(this)
-                .setTitle("Enable Floating Bubble")
-                .setMessage("YV Downloader uses a floating bubble so you can quickly return to the app after copying a YouTube link. Please enable 'Appear on top' on the next screen.")
-                .setPositiveButton("Grant Permission") { _, _ -> BubblePermissionHelper.openOverlaySettings(this) }
-                .setNegativeButton("Not Now", null)
-                .show()
+        // Only show the bubble permission dialog here if onboarding is already done
+        // (returning users who haven't granted the permission yet).
+        // New/first-time users will see it via the onFinished callback in OnboardingScreen above.
+        if (PreferencesHelper.isOnboardingDone(this)) {
+            showBubblePermissionDialogIfNeeded()
         }
 
         handleIncomingIntent(intent)
     }
 
+    /**
+     * Shows the "Enable Floating Bubble" dialog only if the overlay permission
+     * has not been granted yet. Safe to call multiple times — no-ops if already granted.
+     */
+    private fun showBubblePermissionDialogIfNeeded() {
+        if (BubblePermissionHelper.canDrawOverlays(this)) return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Enable Floating Bubble")
+            .setMessage("YV Downloader uses a floating bubble so you can quickly return to the app after copying a YouTube link. Please enable 'Appear on top' on the next screen.")
+            .setPositiveButton("Grant Permission") { _, _ -> BubblePermissionHelper.openOverlaySettings(this) }
+            .setNegativeButton("Not Now", null)
+            .show()
+    }
+
     override fun onResume() {
         super.onResume()
         AppLifecycleTracker.isInForeground = true
-
         // Stop the FloatingBubbleService entirely when the app comes to the foreground.
-        // The bubble is only needed when the user has left the app to go to YouTube.
-        // Stopping it here removes the persistent notification and the KB/s status bar icon.
-        // The service will be restarted automatically by openYoutube() via ACTION_SHOW
-        // the next time the user taps the YouTube FAB.
+        // It will be restarted by openYoutube() via ACTION_SHOW when the user taps the FAB.
         stopService(Intent(this, FloatingBubbleService::class.java))
     }
 
