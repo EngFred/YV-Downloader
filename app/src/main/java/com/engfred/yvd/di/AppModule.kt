@@ -1,11 +1,15 @@
 package com.engfred.yvd.di
 
 import android.content.Context
+import androidx.room.Room
 import androidx.work.WorkManager
+import com.engfred.yvd.data.local.AppDatabase
 import com.engfred.yvd.data.local.ResumeStateStore
 import com.engfred.yvd.data.network.DownloaderImpl
+import com.engfred.yvd.data.repository.DownloadQueueRepositoryImpl
 import com.engfred.yvd.data.repository.ThemeRepositoryImpl
 import com.engfred.yvd.data.repository.YoutubeRepositoryImpl
+import com.engfred.yvd.domain.repository.DownloadQueueRepository
 import com.engfred.yvd.domain.repository.ThemeRepository
 import com.engfred.yvd.domain.repository.YoutubeRepository
 import dagger.Module
@@ -57,4 +61,16 @@ object AppModule {
     fun provideThemeRepository(
         @ApplicationContext context: Context
     ): ThemeRepository = ThemeRepositoryImpl(context)
+
+    @Provides
+    @Singleton
+    fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase =
+        Room.databaseBuilder(context, AppDatabase::class.java, "yvd_database")
+            .fallbackToDestructiveMigration(true)
+            .build()
+
+    @Provides
+    @Singleton
+    fun provideDownloadQueueRepository(db: AppDatabase): DownloadQueueRepository =
+        DownloadQueueRepositoryImpl(db)
 }

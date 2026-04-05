@@ -12,6 +12,7 @@ import androidx.compose.material.icons.rounded.DownloadForOffline
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,9 +30,11 @@ import com.engfred.yvd.ui.downloads.DownloadsScreen
 import com.engfred.yvd.ui.home.HomeScreen
 import com.engfred.yvd.ui.home.HomeViewModel
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(homeViewModel: HomeViewModel) {
     val navController = rememberNavController()
+    val homeState by homeViewModel.state.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
@@ -99,7 +102,15 @@ fun MainScreen(homeViewModel: HomeViewModel) {
                     }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Rounded.DownloadForOffline, contentDescription = null) },
+                    icon = {
+                        BadgedBox(badge = {
+                            if (homeState.activeDownloadCount > 0) {
+                                Badge { Text(homeState.activeDownloadCount.toString()) }
+                            }
+                        }) {
+                            Icon(Icons.Rounded.DownloadForOffline, contentDescription = null)
+                        }
+                    },
                     label = { Text("Downloads") },
                     selected = currentDestination?.hierarchy?.any { it.route == "downloads" } == true,
                     colors = navItemColors,

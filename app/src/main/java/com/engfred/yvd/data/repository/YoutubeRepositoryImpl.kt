@@ -13,6 +13,8 @@ import com.engfred.yvd.data.local.ResumeStateStore
 import com.engfred.yvd.data.network.DownloaderImpl
 import com.engfred.yvd.domain.model.AudioFormat
 import com.engfred.yvd.domain.model.DownloadStatus
+import com.engfred.yvd.domain.model.PlaylistMetadata
+import com.engfred.yvd.domain.model.PlaylistVideoItem
 import com.engfred.yvd.domain.model.VideoFormat
 import com.engfred.yvd.domain.model.VideoMetadata
 import com.engfred.yvd.domain.repository.YoutubeRepository
@@ -170,6 +172,41 @@ class YoutubeRepositoryImpl @Inject constructor(
         }
     }.flowOn(Dispatchers.IO)
 
+    override fun getPlaylistMetadata(url: String): Flow<Resource<PlaylistMetadata>> = flow {
+        emit(Resource.Loading())
+        try {
+            val extractor = ServiceList.YouTube.getPlaylistExtractor(url)
+            extractor.fetchPage()
+
+            val videos = mutableListOf<PlaylistVideoItem>()
+            var page = extractor.initialPage
+
+            while (true) {
+                page.items?.forEach { item ->
+                    if (item is org.schabi.newpipe.extractor.stream.StreamInfoItem) {
+                        val thumb = item.thumbnails.maxByOrNull { it.width }?.url ?: ""
+                        val dur = item.duration.let { d ->
+                            if (d <= 0L) "--:--"
+                            else "%d:%02d".format(d / 60, d % 60)
+                        }
+                        videos.add(PlaylistVideoItem(url = item.url, title = item.name, thumbnailUrl = thumb, duration = dur))
+                    }
+                }
+                if (!page.hasNextPage()) break
+                page = extractor.getPage(page.nextPage!!)
+            }
+
+            emit(Resource.Success(PlaylistMetadata(
+                title = extractor.name,
+                videoCount = videos.size,
+                videos = videos
+            )))
+        } catch (e: Exception) {
+            Log.e(TAG, "Playlist fetch failed: ${e.message}", e)
+            emit(Resource.Error("Could not load playlist: ${e.localizedMessage}"))
+        }
+    }.flowOn(Dispatchers.IO)
+
     // ─── Download Orchestration ───────────────────────────────────────────────
 
     override fun downloadVideo(
@@ -198,10 +235,11 @@ class YoutubeRepositoryImpl @Inject constructor(
                 .replace(Regex("\\s+"), "_")
                 .take(50)
 
-            if (isAudio) {
-                handleAudioDownload(extractor, formatId, cleanTitle, appDir)
+            val (resolvedFormatId, resolvedIsAudio) = resolveStreamForVideo(extractor, formatId, isAudio)
+            if (resolvedIsAudio) {
+                handleAudioDownload(extractor, resolvedFormatId, cleanTitle, appDir)
             } else {
-                handleVideoDownload(extractor, formatId, cleanTitle, appDir)
+                handleVideoDownload(extractor, resolvedFormatId, cleanTitle, appDir)
             }
 
             close()
@@ -695,6 +733,58 @@ class YoutubeRepositoryImpl @Inject constructor(
     private fun fileAlreadyDownloaded(file: File): Boolean =
         file.exists() && file.length() > 1_024L
 
+
+    /**
+     * Resolves quality descriptor strings (used by playlist downloads) to a real
+     * ITAG + isAudio pair by picking the best matching stream from the extractor.
+     * Single-video downloads pass through unchanged (their formatId is already an ITAG).
+     */
+    private fun resolveStreamForVideo(
+        extractor: YoutubeStreamExtractor,
+        formatId: String,
+        isAudio: Boolean
+    ): Pair<String, Boolean> {
+        if (!formatId.startsWith("QUALITY_")) return Pair(formatId, isAudio)
+
+        val allVideo = extractor.videoStreams + extractor.videoOnlyStreams
+        val allAudio = extractor.audioStreams
+
+        fun resolutionInt(s: org.schabi.newpipe.extractor.stream.VideoStream) =
+            s.resolution.replace(Regex("p.*"), "").toIntOrNull() ?: 0
+
+        return when (formatId) {
+            QUALITY_AUDIO -> {
+                val s = allAudio.filter { it.format?.suffix == "m4a" }
+                    .maxByOrNull { it.averageBitrate }
+                    ?: throw Exception("No M4A audio stream found")
+                Pair(s.itag.toString(), true)
+            }
+            QUALITY_BEST -> {
+                val s = allVideo.filter { it.format?.suffix == "mp4" }
+                    .maxByOrNull { resolutionInt(it) }
+                    ?: throw Exception("No MP4 video stream found")
+                Pair(s.itag.toString(), false)
+            }
+            QUALITY_720P -> {
+                val mp4 = allVideo.filter { it.format?.suffix == "mp4" }
+                val s = mp4.sortedByDescending { resolutionInt(it) }
+                    .firstOrNull { resolutionInt(it) <= 720 }
+                    ?: mp4.minByOrNull { resolutionInt(it) }
+                    ?: throw Exception("No MP4 video stream found")
+                Pair(s.itag.toString(), false)
+            }
+            QUALITY_480P -> {
+                val mp4 = allVideo.filter { it.format?.suffix == "mp4" }
+                val s = mp4.sortedByDescending { resolutionInt(it) }
+                    .firstOrNull { resolutionInt(it) <= 480 }
+                    ?: mp4.minByOrNull { resolutionInt(it) }
+                    ?: throw Exception("No MP4 video stream found")
+                Pair(s.itag.toString(), false)
+            }
+            else -> throw Exception("Unknown quality descriptor: $formatId")
+        }
+    }
+
     // ─── Constants ────────────────────────────────────────────────────────────
 
     companion object {
@@ -715,5 +805,10 @@ class YoutubeRepositoryImpl @Inject constructor(
 
         /** How many times to retry a failed chunk before giving up. */
         private const val RETRY_COUNT = 3
+
+        const val QUALITY_BEST  = "QUALITY_BEST"
+        const val QUALITY_720P  = "QUALITY_720P"
+        const val QUALITY_480P  = "QUALITY_480P"
+        const val QUALITY_AUDIO = "QUALITY_AUDIO"
     }
 }

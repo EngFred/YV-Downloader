@@ -17,38 +17,29 @@ package com.engfred.yvd.util
 object UrlValidator {
 
     private val YOUTUBE_PATTERNS = listOf(
-        // Standard / mobile watch URL
         Regex("^(https?://)?(www\\.|m\\.)?youtube\\.com/watch\\?.*v=[a-zA-Z0-9_-]{11}.*$"),
-        // Shortened share URL
         Regex("^(https?://)?youtu\\.be/[a-zA-Z0-9_-]{11}.*$"),
-        // YouTube Shorts
         Regex("^(https?://)?(www\\.|m\\.)?youtube\\.com/shorts/[a-zA-Z0-9_-]{11}.*$"),
     )
 
-    /**
-     * Returns true if [url] matches any known YouTube URL format.
-     * Call [sanitize] first to normalize the URL before validating.
-     */
+    private val PLAYLIST_PATTERN =
+        Regex("^(https?://)?(www\\.|m\\.)?youtube\\.com/playlist\\?.*list=[\\w\\-]+.*$")
+
     fun isValidYouTubeUrl(url: String): Boolean {
-        val trimmed = url.trim()
-        if (trimmed.isBlank()) return false
-        return YOUTUBE_PATTERNS.any { it.matches(trimmed) }
+        val t = url.trim()
+        return t.isNotBlank() && (YOUTUBE_PATTERNS.any { it.matches(t) } || PLAYLIST_PATTERN.matches(t))
     }
 
-    /**
-     * Normalizes a URL string for use with NewPipe.
-     *
-     * - Trims whitespace.
-     * - Adds `https://` if the user pasted a bare domain (e.g., `youtu.be/xxxx`).
-     *
-     * This does NOT validate the URL — call [isValidYouTubeUrl] separately.
-     */
+    /** Returns true ONLY for pure playlist URLs (no video watch URLs). */
+    fun isPlaylistUrl(url: String): Boolean {
+        val t = url.trim()
+        return PLAYLIST_PATTERN.matches(t) && YOUTUBE_PATTERNS.none { it.matches(t) }
+    }
+
     fun sanitize(url: String): String {
         val trimmed = url.trim()
         return if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
             "https://$trimmed"
-        } else {
-            trimmed
-        }
+        } else trimmed
     }
 }

@@ -9,7 +9,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -26,7 +25,6 @@ import com.engfred.yvd.domain.model.VideoMetadata
 @Composable
 fun VideoCard(
     metadata: VideoMetadata,
-    isDownloading: Boolean,
     onDownloadClick: () -> Unit
 ) {
     Card(
@@ -87,22 +85,11 @@ fun VideoCard(
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = Color.White
-                    ),
-                    enabled = !isDownloading
+                    )
                 ) {
-                    if (isDownloading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text("Preparing Download...", fontWeight = FontWeight.SemiBold)
-                    } else {
-                        Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Choose Format", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    }
+                    Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Choose Format", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
             }
         }

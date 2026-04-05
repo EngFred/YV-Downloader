@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.engfred.yvd.ui.components.*
+import com.engfred.yvd.util.NetworkUtil
 import com.engfred.yvd.util.openYoutube
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -44,6 +45,10 @@ fun HomeScreen(
     val clipboardManager = LocalClipboardManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // State to handle the mobile data warning flow
+    var pendingPlaylistFormat by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    var showDataWarningDialog by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) {
@@ -64,14 +69,11 @@ fun HomeScreen(
         }
     }
 
-    if (state.isCancelDialogVisible) {
-        ConfirmationDialog(
-            title = "Cancel Download?",
-            text = "The partial download will be saved. You can resume it later.",
-            confirmText = "Yes, Cancel",
-            onConfirm = { viewModel.cancelDownload() },
-            onDismiss = { viewModel.hideCancelDialog() }
-        )
+    LaunchedEffect(state.queuedSnackbarMessage) {
+        state.queuedSnackbarMessage?.let {
+            snackbarHostState.showSnackbar(message = it, duration = SnackbarDuration.Short)
+            viewModel.clearQueuedMessage()
+        }
     }
 
     if (state.isThemeDialogVisible) {
@@ -86,7 +88,7 @@ fun HomeScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             BadgedBox(
-                modifier = Modifier.padding(bottom = 88.dp), // FIX 3: Pushes the FAB up so it doesn't hide behind the custom Nav Pill
+                modifier = Modifier.padding(bottom = 88.dp),
                 badge = {
                     if (state.activeDownloadCount > 1) {
                         Badge(containerColor = MaterialTheme.colorScheme.primary) { Text(state.activeDownloadCount.toString()) }
@@ -106,16 +108,13 @@ fun HomeScreen(
         },
         topBar = {
             TopAppBar(
-                title = {
-                    Text("YV Downloader", fontWeight = FontWeight.Bold)
-                },
+                title = { Text("YV Downloader", fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onBackground,
                     actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                 ),
                 actions = {
-                    // FIX 1: Replaced the clunky icon with a premium soft circular Palette button
                     IconButton(
                         onClick = { viewModel.showThemeDialog() },
                         modifier = Modifier
@@ -140,7 +139,7 @@ fun HomeScreen(
         ) {
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Premium Custom Input Field
+            // Input Field
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -193,10 +192,7 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            AnimatedVisibility(
-                visible = state.videoMetadata == null && !state.isDownloading && !state.downloadComplete && !state.downloadFailed
-            ) {
-                // FIX 2: Removed custom .shadow() modifier and used proper Button elevation to fix UI glitch
+            AnimatedVisibility(visible = state.videoMetadata == null && state.playlistMetadata == null) {
                 Button(
                     onClick = {
                         keyboardController?.hide()
@@ -219,9 +215,8 @@ fun HomeScreen(
                 }
             }
 
-            // Beautiful Empty State
             AnimatedVisibility(
-                visible = state.videoMetadata == null && !state.isDownloading && !state.downloadComplete && !state.downloadFailed && !state.isLoading,
+                visible = state.videoMetadata == null && state.playlistMetadata == null && !state.isLoading,
                 enter = fadeIn(), exit = fadeOut()
             ) {
                 Column(
@@ -259,29 +254,19 @@ fun HomeScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 VideoCard(
                     metadata = metadata,
-                    isDownloading = state.isDownloading,
                     onDownloadClick = { viewModel.showFormatDialog() }
                 )
             }
 
-            AnimatedVisibility(visible = state.isDownloading || state.downloadComplete || state.downloadFailed) {
-                Column {
-                    Spacer(modifier = Modifier.height(24.dp))
-                    DownloadProgressCard(
-                        statusText = state.downloadStatusText,
-                        progress = state.downloadProgress,
-                        isDownloading = state.isDownloading,
-                        isComplete = state.downloadComplete,
-                        isFailed = state.downloadFailed,
-                        isAudio = state.isAudio,
-                        onCancel = { viewModel.showCancelDialog() },
-                        onPlay = { viewModel.openMediaFile() },
-                        onShare = { viewModel.shareMediaFile() },
-                        onRetry = { viewModel.retryDownload() }
-                    )
-                }
+            state.playlistMetadata?.let { playlist ->
+                Spacer(modifier = Modifier.height(16.dp))
+                PlaylistCard(
+                    metadata = playlist,
+                    onDownloadClick = { viewModel.showPlaylistFormatDialog() }
+                )
             }
-            Spacer(modifier = Modifier.height(120.dp)) // Extra space for the new floating nav bar
+
+            Spacer(modifier = Modifier.height(120.dp))
         }
     }
 
@@ -294,6 +279,50 @@ fun HomeScreen(
                     permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
                 viewModel.downloadMedia(formatId, isAudio)
+            }
+        )
+    }
+
+    if (state.showActiveDownloadGuardDialog) {
+        ConfirmationDialog(
+            title = "Downloads in Progress",
+            text = "You have ${state.activeDownloadCount} active download(s). Load the new link anyway? Downloads will continue in the queue.",
+            confirmText = "Load New Link",
+            onConfirm = { viewModel.confirmReplaceWithPendingUrl() },
+            onDismiss  = { viewModel.dismissGuardDialog() }
+        )
+    }
+
+    if (state.isPlaylistFormatDialogVisible && state.playlistMetadata != null) {
+        PlaylistFormatSheet(
+            playlistMetadata = state.playlistMetadata!!,
+            onDismiss = { viewModel.hidePlaylistFormatDialog() },
+            onFormatSelected = { formatId, isAudio ->
+                viewModel.hidePlaylistFormatDialog() // Hide sheet first
+                if (NetworkUtil.isUsingMobileData(context)) {
+                    pendingPlaylistFormat = formatId to isAudio
+                    showDataWarningDialog = true
+                } else {
+                    viewModel.downloadEntirePlaylist(formatId, isAudio)
+                }
+            }
+        )
+    }
+
+    // New Data Warning Dialog
+    if (showDataWarningDialog && pendingPlaylistFormat != null) {
+        ConfirmationDialog(
+            title = "Mobile Data Warning",
+            text = "You are currently using mobile data. Downloading an entire playlist (${state.playlistMetadata?.videoCount ?: 0} videos) may consume a significant amount of your data plan.\n\nDo you want to proceed?",
+            confirmText = "Download Anyway",
+            onConfirm = {
+                viewModel.downloadEntirePlaylist(pendingPlaylistFormat!!.first, pendingPlaylistFormat!!.second)
+                showDataWarningDialog = false
+                pendingPlaylistFormat = null
+            },
+            onDismiss = {
+                showDataWarningDialog = false
+                pendingPlaylistFormat = null
             }
         )
     }

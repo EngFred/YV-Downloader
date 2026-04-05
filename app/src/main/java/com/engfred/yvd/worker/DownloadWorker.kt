@@ -14,161 +14,185 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.engfred.yvd.MainActivity
+import com.engfred.yvd.domain.model.DownloadQueueStatus
 import com.engfred.yvd.domain.model.DownloadStatus
+import com.engfred.yvd.domain.repository.DownloadQueueRepository
 import com.engfred.yvd.domain.repository.YoutubeRepository
 import com.engfred.yvd.receiver.CancelReceiver
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.withContext
 import java.io.File
 
-/**
- * Background Worker executed by WorkManager.
- *
- * Responsibilities:
- * 1. Executes the long-running download task.
- * 2. Manages Foreground Service notifications with Cancel Action.
- * 3. Triggers the MediaScanner so downloaded files appear in Gallery/Music apps.
- */
 @HiltWorker
 class DownloadWorker @AssistedInject constructor(
     @Assisted private val context: Context,
     @Assisted workerParams: WorkerParameters,
-    private val repository: YoutubeRepository
+    private val repository: YoutubeRepository,
+    private val queueRepository: DownloadQueueRepository
 ) : CoroutineWorker(context, workerParams) {
 
-    private val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    private val notificationManager =
+        context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+    private var downloadCompleted = false
 
     override suspend fun doWork(): Result {
-        val url = inputData.getString("url")
-        val formatId = inputData.getString("formatId")
-        val title = inputData.getString("title") ?: "Media"
-        val isAudio = inputData.getBoolean("isAudio", false)
+        val queueItemId = inputData.getString("queueItemId") ?: return Result.failure()
+        val url         = inputData.getString("url")         ?: return Result.failure()
+        val formatId    = inputData.getString("formatId")    ?: return Result.failure()
+        val title       = inputData.getString("title") ?: "Media"
+        val isAudio     = inputData.getBoolean("isAudio", false)
 
-        if (url == null || formatId == null) return Result.failure()
-
-        val notificationId = System.currentTimeMillis().toInt()
+        val notifId   = queueItemId.hashCode()
         val typeLabel = if (isAudio) "Audio" else "Video"
 
+        // Mark as RUNNING in Room immediately
+        queueRepository.updateStatusAndWorkId(
+            queueItemId, DownloadQueueStatus.RUNNING, id.toString(), "Starting…"
+        )
+
         try {
-            // Promote to Foreground Service immediately
-            setForeground(createForegroundInfo(notificationId, title, 0, true, typeLabel))
+            setForeground(buildForegroundInfo(notifId, title, 0, true, typeLabel, queueItemId))
 
             var resultFile: File? = null
 
             repository.downloadVideo(url, formatId, title, isAudio).collectLatest { status ->
                 when (status) {
                     is DownloadStatus.Progress -> {
-                        setProgress(
-                            workDataOf(
-                                "progress" to status.progress,
-                                "status" to status.text
-                            )
+                        queueRepository.updateProgress(
+                            queueItemId, DownloadQueueStatus.RUNNING, status.progress, status.text
                         )
-                        // Update Notification
-                        if (status.progress > 0) {
-                            setForeground(createForegroundInfo(notificationId, title, status.progress.toInt(), false, typeLabel))
+                        if (status.progress > 0f) {
+                            setForeground(buildForegroundInfo(notifId, title, status.progress.toInt(), false, typeLabel, queueItemId))
                         }
                     }
                     is DownloadStatus.Success -> resultFile = status.file
-                    is DownloadStatus.Error -> throw Exception(status.message)
+                    is DownloadStatus.Error   -> throw Exception(status.message)
                 }
             }
 
-            // Validation and Media Scan
-            return if (resultFile != null && resultFile!!.exists()) {
-                MediaScannerConnection.scanFile(
-                    context,
-                    arrayOf(resultFile!!.absolutePath),
-                    null
-                ) { _, _ -> }
+            val file = resultFile?.takeIf { it.exists() }
+                ?: throw Exception("File verification failed after download")
 
-                showCompletionNotification(notificationId + 1, title, resultFile!!, isAudio)
-                Result.success(workDataOf("filePath" to resultFile!!.absolutePath))
-            } else {
-                throw Exception("File verification failed")
-            }
+            downloadCompleted = true
+            queueRepository.markDone(queueItemId, file.absolutePath)
+            MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), null) { _, _ -> }
+            showCompletionNotification(notifId + 1, title, file, isAudio)
+
+            return Result.success(workDataOf("filePath" to file.absolutePath))
+
         } catch (e: Exception) {
-            // Check if it was cancelled by user
             if (isStopped) {
-                // If stopped by user, we can silence the error or show "Cancelled"
+                // Stopped externally (pause from UI or notification) — chunk state is safe on disk
+                withContext(NonCancellable) {
+                    val item = queueRepository.getById(queueItemId)
+                    if (item != null &&
+                        (item.status == DownloadQueueStatus.RUNNING || item.status == DownloadQueueStatus.QUEUED)
+                    ) {
+                        queueRepository.markPaused(queueItemId)
+                    }
+                }
                 return Result.failure()
             }
-            e.printStackTrace()
-            showFailureNotification(notificationId + 1, title, e.message ?: "Error")
-            return Result.failure(workDataOf("error" to e.message))
+            val msg = e.message ?: "Unknown error"
+            queueRepository.markFailed(queueItemId, msg)
+            showFailureNotification(notifId + 1, title, msg)
+            return Result.failure(workDataOf("error" to msg))
+
+        } finally {
+            // Safety net for edge cases where isStopped wasn't caught above
+            if (isStopped && !downloadCompleted) {
+                withContext(NonCancellable) {
+                    val item = queueRepository.getById(queueItemId)
+                    if (item?.status == DownloadQueueStatus.RUNNING) {
+                        queueRepository.markPaused(queueItemId)
+                    }
+                }
+            }
         }
     }
 
-    /**
-     * Creates the notification with a CANCEL Action button.
-     */
-    private fun createForegroundInfo(id: Int, title: String, progress: Int, indeterminate: Boolean, typeLabel: String): ForegroundInfo {
-        // 1. Intent to launch app
-        val intent = Intent(context, com.engfred.yvd.MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        }
-        val pendingIntent = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+    // ─── Notifications ─────────────────────────────────────────────────────────
 
-        // 2. Intent to CANCEL download (Broadcast)
-        val cancelIntent = Intent(context, CancelReceiver::class.java).apply {
-            action = "CANCEL_DOWNLOAD"
-        }
-        val pendingCancelIntent = PendingIntent.getBroadcast(
-            context,
-            0,
-            cancelIntent,
+    private fun buildForegroundInfo(
+        id: Int,
+        title: String,
+        progress: Int,
+        indeterminate: Boolean,
+        typeLabel: String,
+        queueItemId: String
+    ): ForegroundInfo {
+        val openIntent = PendingIntent.getActivity(
+            context, 0,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            },
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // "Pause" broadcasts to CancelReceiver, which cancels the WorkManager job.
+        // The worker's isStopped path then marks the Room item as PAUSED.
+        val pauseIntent = PendingIntent.getBroadcast(
+            context, queueItemId.hashCode(),
+            Intent(context, CancelReceiver::class.java).apply {
+                action = "PAUSE_DOWNLOAD"
+                putExtra("workManagerId", this@DownloadWorker.id.toString())
+            },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // 3. Build Notification
         val notification = NotificationCompat.Builder(context, "download_channel")
             .setContentTitle("Downloading $typeLabel")
-            .setContentText("$title ($progress%)")
+            .setContentText("$title${if (progress > 0) " ($progress%)" else ""}")
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(openIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setProgress(100, progress, indeterminate)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", pendingCancelIntent)
+            .addAction(android.R.drawable.ic_media_pause, "Pause", pauseIntent)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return ForegroundInfo(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(id, notification)
         }
-        return ForegroundInfo(id, notification)
     }
 
     private fun showCompletionNotification(id: Int, title: String, file: File, isAudio: Boolean) {
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
         val mimeType = if (isAudio) "audio/*" else "video/*"
-
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, mimeType)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-
-        val pendingIntent = PendingIntent.getActivity(context, id, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_CANCEL_CURRENT)
-
+        val openIntent = PendingIntent.getActivity(
+            context, id,
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_CANCEL_CURRENT
+        )
         val notification = NotificationCompat.Builder(context, "download_completed")
             .setContentTitle("Download Complete")
             .setContentText(title)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(openIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
-
         notificationManager.notify(id, notification)
     }
 
     private fun showFailureNotification(id: Int, title: String, error: String) {
         val notification = NotificationCompat.Builder(context, "download_completed")
             .setContentTitle("Download Failed")
-            .setContentText("Error: $error")
+            .setContentText(title)
+            .setStyle(NotificationCompat.BigTextStyle().bigText("$title\n$error"))
             .setSmallIcon(android.R.drawable.stat_notify_error)
-            .setStyle(NotificationCompat.BigTextStyle().bigText("Error: $error"))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
             .build()
         notificationManager.notify(id, notification)
     }

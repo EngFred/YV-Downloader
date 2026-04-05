@@ -5,15 +5,18 @@ import androidx.lifecycle.viewModelScope
 import androidx.work.Constraints
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.engfred.yvd.TAG_DOWNLOAD_JOB
 import com.engfred.yvd.common.Resource
+import com.engfred.yvd.data.local.DownloadQueueEntity
 import com.engfred.yvd.domain.model.AppTheme
+import com.engfred.yvd.domain.model.DownloadQueueStatus
+import com.engfred.yvd.domain.model.PlaylistMetadata
 import com.engfred.yvd.domain.model.VideoMetadata
+import com.engfred.yvd.domain.repository.DownloadQueueRepository
 import com.engfred.yvd.domain.repository.ThemeRepository
 import com.engfred.yvd.domain.repository.YoutubeRepository
-import com.engfred.yvd.util.MediaHelper
 import com.engfred.yvd.util.UrlValidator
 import com.engfred.yvd.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -25,65 +28,36 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 
-/**
- * UI state for [HomeScreen].
- *
- * Kept as a flat data class (no sealed class hierarchy) so individual fields can be updated
- * selectively with [MutableStateFlow.update] — avoiding full-state rebuilds on every keystroke.
- */
 data class HomeState(
     // URL input
     val urlInput: String = "",
-    val urlError: String? = null,          // Shown inline beneath the text field
-
+    val urlError: String? = null,
     // Metadata loading
     val isLoading: Boolean = false,
     val videoMetadata: VideoMetadata? = null,
-
-    // Download progress
-    val isDownloading: Boolean = false,
-    val downloadProgress: Float = 0f,
-    val downloadStatusText: String = "",
-
-    // Terminal states
-    val downloadComplete: Boolean = false,
-    val downloadFailed: Boolean = false,
-    val downloadedFile: File? = null,
-    val isAudio: Boolean = false,
-
-    // Error snackbar
+    // Playlist
+    val isPlaylistUrl: Boolean = false,
+    val playlistMetadata: PlaylistMetadata? = null,
+    // Global state
     val error: String? = null,
-
-    // Queue count — number of active or enqueued download workers
     val activeDownloadCount: Int = 0,
-
-    // Dialog visibility
+    val queuedSnackbarMessage: String? = null,
+    // Dialogs
     val isFormatDialogVisible: Boolean = false,
-    val isCancelDialogVisible: Boolean = false,
     val isThemeDialogVisible: Boolean = false,
-) {
-    /** True only when a download is in a terminal failed state and can be retried. */
-    val canRetry: Boolean get() = downloadFailed && !isDownloading
-}
-
-/**
- * Stores the parameters needed to restart a failed download without asking the user again.
- */
-private data class LastDownloadParams(
-    val url: String,
-    val formatId: String,
-    val title: String,
-    val isAudio: Boolean
+    val isPlaylistFormatDialogVisible: Boolean = false,
+    // Incoming URL guard (triggers when user pastes a new link while queue is active)
+    val pendingIncomingUrl: String? = null,
+    val showActiveDownloadGuardDialog: Boolean = false,
 )
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val repository: YoutubeRepository,
-    private val mediaHelper: MediaHelper,
+    private val queueRepository: DownloadQueueRepository,
     private val themeRepository: ThemeRepository,
     private val workManager: WorkManager
 ) : ViewModel() {
@@ -97,47 +71,52 @@ class HomeViewModel @Inject constructor(
         initialValue = AppTheme.SYSTEM
     )
 
-    // Retained so we can cancel the specific job and so retry works.
-    private var currentWorkId: UUID? = null
-    private var lastDownloadParams: LastDownloadParams? = null
-
     init {
-        observeGlobalQueueCount()
+        observeActiveDownloadCount()
     }
 
-    // ─── URL Input ────────────────────────────────────────────────────────────
+    private fun observeActiveDownloadCount() {
+        viewModelScope.launch {
+            queueRepository.observeActiveQueue().collect { queue ->
+                _state.update {
+                    it.copy(
+                        activeDownloadCount = queue.count { item ->
+                            item.status == DownloadQueueStatus.RUNNING ||
+                                    item.status == DownloadQueueStatus.QUEUED
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    // ─── URL Input ─────────────────────────────────────────────────────────────
 
     fun onUrlInputChanged(newUrl: String) {
         _state.update {
             it.copy(
                 urlInput = newUrl,
                 urlError = null,
-                // Clear video card and download state when the user edits the URL.
                 videoMetadata = if (newUrl.isBlank()) null else it.videoMetadata,
-                downloadComplete = false,
-                downloadFailed = false,
-                downloadedFile = null,
-                isDownloading = false,
-                downloadProgress = 0f,
+                playlistMetadata = if (newUrl.isBlank()) null else it.playlistMetadata,
+                isPlaylistUrl = false,
                 error = null
             )
         }
     }
 
-    // ─── Metadata Loading ─────────────────────────────────────────────────────
+    // ─── Metadata Loading ──────────────────────────────────────────────────────
 
-    /**
-     * Validates and sanitizes [url], then fetches metadata via the repository.
-     *
-     * URL validation is done eagerly here so we surface a clear inline error message
-     * ("Please paste a valid YouTube link") rather than a confusing NewPipe exception.
-     */
     fun loadVideoInfo(url: String) {
         val sanitized = UrlValidator.sanitize(url)
-
-        // Update the text field to the sanitized version so the user sees what will be used.
         if (sanitized != _state.value.urlInput) {
             _state.update { it.copy(urlInput = sanitized) }
+        }
+
+        // Route to playlist extractor if it's a playlist URL
+        if (UrlValidator.isPlaylistUrl(sanitized)) {
+            loadPlaylistInfo(sanitized)
+            return
         }
 
         if (!UrlValidator.isValidYouTubeUrl(sanitized)) {
@@ -149,12 +128,8 @@ class HomeViewModel @Inject constructor(
 
         _state.update {
             it.copy(
-                isLoading = true,
-                urlError = null,
-                error = null,
-                videoMetadata = null,
-                downloadComplete = false,
-                downloadFailed = false
+                isLoading = true, urlError = null, error = null,
+                videoMetadata = null, playlistMetadata = null, isPlaylistUrl = false
             )
         }
 
@@ -162,206 +137,178 @@ class HomeViewModel @Inject constructor(
             .onEach { result ->
                 when (result) {
                     is Resource.Loading -> _state.update { it.copy(isLoading = true) }
-                    is Resource.Success -> _state.update {
-                        it.copy(isLoading = false, videoMetadata = result.data)
-                    }
-                    is Resource.Error -> _state.update {
-                        it.copy(isLoading = false, error = result.message)
-                    }
+                    is Resource.Success -> _state.update { it.copy(isLoading = false, videoMetadata = result.data) }
+                    is Resource.Error   -> _state.update { it.copy(isLoading = false, error = result.message) }
                 }
             }
             .launchIn(viewModelScope)
     }
 
-    // ─── Download ─────────────────────────────────────────────────────────────
+    private fun loadPlaylistInfo(url: String) {
+        _state.update {
+            it.copy(
+                isLoading = true, urlError = null, error = null,
+                videoMetadata = null, playlistMetadata = null, isPlaylistUrl = true
+            )
+        }
+        repository.getPlaylistMetadata(url)
+            .onEach { result ->
+                when (result) {
+                    is Resource.Loading -> _state.update { it.copy(isLoading = true) }
+                    is Resource.Success -> _state.update { it.copy(isLoading = false, playlistMetadata = result.data) }
+                    is Resource.Error   -> _state.update { it.copy(isLoading = false, error = result.message) }
+                }
+            }
+            .launchIn(viewModelScope)
+    }
 
-    /**
-     * Enqueues a WorkManager download job with [NetworkType.CONNECTED] constraints.
-     *
-     * The job is tagged "download_job" so it can be counted (for the queue badge) and
-     * cancelled in bulk (e.g. from the CancelReceiver broadcast).
-     */
+    // ─── Single Video Download ─────────────────────────────────────────────────
+
     fun downloadMedia(formatId: String, isAudio: Boolean) {
         val currentState = _state.value
         val url = currentState.urlInput
         val title = currentState.videoMetadata?.title ?: "video"
+        val thumbnailUrl = currentState.videoMetadata?.thumbnailUrl ?: ""
 
-        // Cache the params so retry can restart without showing the format sheet again.
-        lastDownloadParams = LastDownloadParams(url, formatId, title, isAudio)
+        val queueItemId = UUID.randomUUID().toString()
+        val entity = DownloadQueueEntity(
+            id = queueItemId,
+            videoUrl = url,
+            videoTitle = title,
+            thumbnailUrl = thumbnailUrl,
+            formatId = formatId,
+            isAudio = isAudio,
+            workManagerId = null,
+            status = DownloadQueueStatus.QUEUED,
+            progress = 0f,
+            statusText = "Queued…",
+            errorMessage = null,
+            outputFilePath = null,
+            createdAt = System.currentTimeMillis(),
+            playlistTitle = null
+        )
 
-        _state.update {
-            it.copy(
-                isDownloading = true,
-                downloadProgress = 0f,
-                downloadStatusText = "Queued…",
-                downloadComplete = false,
-                downloadFailed = false,
-                downloadedFile = null,
-                error = null,
-                isAudio = isAudio,
-                isFormatDialogVisible = false
-            )
+        viewModelScope.launch {
+            queueRepository.enqueue(entity)
+            val workId = enqueueWorker(queueItemId, url, formatId, title, isAudio)
+            queueRepository.updateStatusAndWorkId(queueItemId, DownloadQueueStatus.QUEUED, workId, "Queued…")
+            _state.update { it.copy(isFormatDialogVisible = false, queuedSnackbarMessage = "Added to download queue") }
         }
+    }
 
-        val downloadRequest = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
-                    .build()
-            )
+    // ─── Playlist Download ────────────────────────────────────────────────────
+
+    fun downloadEntirePlaylist(formatId: String, isAudio: Boolean) {
+        val playlist = _state.value.playlistMetadata ?: return
+
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val entities = playlist.videos.mapIndexed { index, video ->
+                DownloadQueueEntity(
+                    id = UUID.randomUUID().toString(),
+                    videoUrl = video.url,
+                    videoTitle = video.title,
+                    thumbnailUrl = video.thumbnailUrl,
+                    formatId = formatId,
+                    isAudio = isAudio,
+                    workManagerId = null,
+                    status = DownloadQueueStatus.QUEUED,
+                    progress = 0f,
+                    statusText = "Queued…",
+                    errorMessage = null,
+                    outputFilePath = null,
+                    createdAt = now + index,   // unique timestamp preserves order
+                    playlistTitle = playlist.title
+                )
+            }
+
+            queueRepository.enqueueAll(entities)
+
+            // Enqueue all WorkManager jobs and store their IDs back to Room
+            entities.forEach { entity ->
+                val workId = enqueueWorker(entity.id, entity.videoUrl, entity.formatId, entity.videoTitle, entity.isAudio)
+                queueRepository.updateStatusAndWorkId(entity.id, DownloadQueueStatus.QUEUED, workId, "Queued…")
+            }
+
+            _state.update {
+                it.copy(
+                    isPlaylistFormatDialogVisible = false,
+                    queuedSnackbarMessage = "${playlist.videoCount} videos added to queue"
+                )
+            }
+        }
+    }
+
+    // ─── WorkManager ──────────────────────────────────────────────────────────
+
+    private fun enqueueWorker(
+        queueItemId: String,
+        url: String,
+        formatId: String,
+        title: String,
+        isAudio: Boolean
+    ): String {
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setInputData(
                 workDataOf(
-                    "url" to url,
-                    "formatId" to formatId,
-                    "title" to title,
-                    "isAudio" to isAudio
+                    "queueItemId" to queueItemId,
+                    "url"         to url,
+                    "formatId"    to formatId,
+                    "title"       to title,
+                    "isAudio"     to isAudio
                 )
             )
             .addTag(TAG_DOWNLOAD_JOB)
             .build()
-
-        currentWorkId = downloadRequest.id
-        workManager.enqueue(downloadRequest)
-        observeWork(downloadRequest.id)
+        workManager.enqueue(request)
+        return request.id.toString()
     }
 
-    /**
-     * Re-runs the last download with identical parameters.
-     * A no-op if there is no [lastDownloadParams] (shouldn't happen in practice since
-     * the retry button is only shown when [HomeState.canRetry] is true).
-     */
-    fun retryDownload() {
-        val params = lastDownloadParams ?: return
-        downloadMedia(params.formatId, params.isAudio)
+    // ─── Incoming URL Guard ───────────────────────────────────────────────────
+
+    fun handleIncomingUrl(url: String) {
+        if (_state.value.activeDownloadCount > 0) {
+            _state.update { it.copy(pendingIncomingUrl = url, showActiveDownloadGuardDialog = true) }
+            return
+        }
+        applyIncomingUrl(url)
     }
 
-    fun cancelDownload() {
-        currentWorkId?.let { workManager.cancelWorkById(it) }
+    fun confirmReplaceWithPendingUrl() {
+        val url = _state.value.pendingIncomingUrl ?: return
+        _state.update { it.copy(showActiveDownloadGuardDialog = false, pendingIncomingUrl = null) }
+        applyIncomingUrl(url)
+    }
+
+    fun dismissGuardDialog() {
+        _state.update { it.copy(showActiveDownloadGuardDialog = false, pendingIncomingUrl = null) }
+    }
+
+    private fun applyIncomingUrl(url: String) {
         _state.update {
             it.copy(
-                isDownloading = false,
-                downloadStatusText = "Cancelled",
-                isCancelDialogVisible = false
+                urlInput = url, urlError = null,
+                videoMetadata = null, playlistMetadata = null,
+                isPlaylistUrl = false, error = null
             )
         }
-    }
-
-    // ─── Work Observation ─────────────────────────────────────────────────────
-
-    private fun observeWork(id: UUID) {
-        viewModelScope.launch {
-            workManager.getWorkInfoByIdFlow(id).collect { info ->
-                if (info == null) return@collect
-                when (info.state) {
-                    WorkInfo.State.ENQUEUED -> _state.update {
-                        it.copy(isDownloading = true, downloadStatusText = "Waiting for network…")
-                    }
-                    WorkInfo.State.RUNNING -> {
-                        val progress = info.progress.getFloat("progress", 0f)
-                        val status = info.progress.getString("status") ?: "Downloading…"
-                        _state.update {
-                            it.copy(
-                                isDownloading = true,
-                                downloadProgress = progress,
-                                downloadStatusText = status
-                            )
-                        }
-                    }
-                    WorkInfo.State.SUCCEEDED -> {
-                        val path = info.outputData.getString("filePath")
-                        val file = path?.let { File(it) }
-                        _state.update {
-                            it.copy(
-                                isDownloading = false,
-                                downloadComplete = true,
-                                downloadFailed = false,
-                                downloadProgress = 100f,
-                                downloadedFile = file,
-                                downloadStatusText = "Download complete"
-                            )
-                        }
-                    }
-                    WorkInfo.State.FAILED -> {
-                        val errorMsg = info.outputData.getString("error")
-                            ?: "Download failed — tap Retry to try again"
-                        _state.update {
-                            it.copy(
-                                isDownloading = false,
-                                downloadFailed = true,
-                                downloadComplete = false,
-                                downloadStatusText = errorMsg,
-                                downloadProgress = 0f
-                            )
-                        }
-                    }
-                    WorkInfo.State.CANCELLED -> _state.update {
-                        it.copy(
-                            isDownloading = false,
-                            downloadFailed = false,
-                            downloadStatusText = "Download cancelled"
-                        )
-                    }
-                    else -> Unit
-                }
-            }
-        }
-    }
-
-    /**
-     * Observes ALL "download_job" tagged work to keep [HomeState.activeDownloadCount] accurate.
-     * This count drives the badge shown on the Download FAB / nav bar.
-     */
-    private fun observeGlobalQueueCount() {
-        viewModelScope.launch {
-            workManager.getWorkInfosByTagFlow(TAG_DOWNLOAD_JOB).collect { infos ->
-                val active = infos.count {
-                    it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED
-                }
-                _state.update { it.copy(activeDownloadCount = active) }
-            }
-        }
-    }
-
-    // ─── Media Actions ────────────────────────────────────────────────────────
-
-    fun openMediaFile() {
-        val file = _state.value.downloadedFile ?: return
-        try {
-            mediaHelper.openMediaFile(file)
-        } catch (e: Exception) {
-            _state.update { it.copy(error = e.message) }
-        }
-    }
-
-    fun shareMediaFile() {
-        val file = _state.value.downloadedFile ?: return
-        try {
-            mediaHelper.shareMediaFile(file)
-        } catch (e: Exception) {
-            _state.update { it.copy(error = e.message) }
-        }
+        loadVideoInfo(url)
     }
 
     // ─── Dialog Visibility ────────────────────────────────────────────────────
 
     fun showFormatDialog() {
-        if (_state.value.videoMetadata != null) {
-            _state.update { it.copy(isFormatDialogVisible = true) }
-        }
+        if (_state.value.videoMetadata != null) _state.update { it.copy(isFormatDialogVisible = true) }
     }
-
     fun hideFormatDialog() = _state.update { it.copy(isFormatDialogVisible = false) }
 
-    fun showCancelDialog() {
-        if (_state.value.isDownloading) {
-            _state.update { it.copy(isCancelDialogVisible = true) }
-        }
+    fun showPlaylistFormatDialog() {
+        if (_state.value.playlistMetadata != null) _state.update { it.copy(isPlaylistFormatDialogVisible = true) }
     }
-
-    fun hideCancelDialog() = _state.update { it.copy(isCancelDialogVisible = false) }
+    fun hidePlaylistFormatDialog() = _state.update { it.copy(isPlaylistFormatDialogVisible = false) }
 
     fun showThemeDialog() = _state.update { it.copy(isThemeDialogVisible = true) }
-
     fun hideThemeDialog() = _state.update { it.copy(isThemeDialogVisible = false) }
 
     fun updateTheme(newTheme: AppTheme) {
@@ -371,35 +318,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Called when the user returns to the app via the floating bubble, either on cold start
-     * ([MainActivity.onCreate]) or while the app is already running ([MainActivity.onNewIntent]).
-     *
-     * Populates the URL input field and immediately kicks off metadata loading — the user
-     * should land on the app and see the video card loading without any manual action.
-     */
-    fun handleIncomingUrl(url: String) {
-        _state.update {
-            it.copy(
-                urlInput = url,
-                urlError = null,
-                videoMetadata = null,
-                downloadComplete = false,
-                downloadFailed = false,
-                downloadedFile = null,
-                isDownloading = false,
-                downloadProgress = 0f,
-                error = null
-            )
-        }
-        loadVideoInfo(url)
-    }
-
     fun clearError() = _state.update { it.copy(error = null) }
-
-    // ─── Constants ────────────────────────────────────────────────────────────
-
-    companion object {
-        const val TAG_DOWNLOAD_JOB = "download_job"
-    }
+    fun clearQueuedMessage() = _state.update { it.copy(queuedSnackbarMessage = null) }
 }
