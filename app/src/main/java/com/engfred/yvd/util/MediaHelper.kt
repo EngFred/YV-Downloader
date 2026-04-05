@@ -1,5 +1,6 @@
 package com.engfred.yvd.util
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -46,14 +47,22 @@ class MediaHelper @Inject constructor(
     fun openMediaFile(file: File) {
         if (!file.exists()) throw IllegalStateException("File not found: ${file.name}")
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
-        val intent = Intent(Intent.ACTION_VIEW).apply {
+
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, file.resolveMimeType())
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        if (intent.resolveActivity(context.packageManager) == null) {
+
+        // Always wrap in a chooser — forces the sheet to appear even if only one app matches
+        val chooser = Intent.createChooser(viewIntent, "Open with").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            context.startActivity(chooser)
+        } catch (e: ActivityNotFoundException) {
             throw IllegalStateException("No app found to open this file type (${file.extension})")
         }
-        context.startActivity(intent)
     }
 
     /**

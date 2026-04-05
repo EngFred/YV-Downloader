@@ -22,6 +22,16 @@
 
     <queries>
         <package android:name="com.google.android.youtube" />
+
+        <!-- Required on API 30+ to resolve video/audio player intents -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="audio/*" />
+        </intent>
     </queries>
 
     <application
