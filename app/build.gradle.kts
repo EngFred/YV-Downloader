@@ -18,8 +18,8 @@ android {
         applicationId = "com.engfred.yvd"
         minSdk = 24
         targetSdk = 36
-        versionCode = 5
-        versionName = "2.3.0"
+        versionCode = 6
+        versionName = "2.3.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
