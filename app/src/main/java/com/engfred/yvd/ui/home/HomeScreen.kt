@@ -107,26 +107,6 @@ fun HomeScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        floatingActionButton = {
-            BadgedBox(
-                modifier = Modifier.padding(bottom = 88.dp),
-                badge = {
-                    if (state.activeDownloadCount > 1) {
-                        Badge(containerColor = MaterialTheme.colorScheme.primary) { Text(state.activeDownloadCount.toString()) }
-                    }
-                }
-            ) {
-                FloatingActionButton(
-                    onClick = { openYoutube(context) },
-                    containerColor = Color(0xFFFF0000), // YouTube Red
-                    contentColor = Color.White,
-                    shape = CircleShape,
-                    modifier = Modifier.shadow(8.dp, CircleShape)
-                ) {
-                    Icon(Icons.Rounded.SmartDisplay, contentDescription = "Open YouTube", modifier = Modifier.size(28.dp))
-                }
-            }
-        },
         topBar = {
             TopAppBar(
                 title = { Text("YV Downloader", fontWeight = FontWeight.Bold) },

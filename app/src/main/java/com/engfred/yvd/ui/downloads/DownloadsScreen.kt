@@ -165,6 +165,7 @@ private fun QueueTab(
 ) {
     if (queue.isEmpty()) {
         EmptyState(
+            modifier = Modifier.padding(bottom = 100.dp),
             icon = { Icon(Icons.Rounded.DownloadDone, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)) },
             title = "Queue is Empty",
             subtitle = "Downloads you start will appear here. Tap the YouTube button to begin."
@@ -195,6 +196,7 @@ private fun QueueTab(
 private fun LibraryTab(state: LibraryState, viewModel: DownloadsViewModel) {
     if (state.files.isEmpty()) {
         EmptyState(
+            modifier = Modifier.padding(bottom = 100.dp),
             icon = { Icon(Icons.Rounded.CloudOff, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)) },
             title = "No Downloads Yet",
             subtitle = "Your downloaded videos and music will appear here, safe and sound."
@@ -306,12 +308,15 @@ private fun LibraryItemCard(
 
 @Composable
 private fun EmptyState(
+    modifier: Modifier = Modifier,
     icon: @Composable () -> Unit,
     title: String,
     subtitle: String
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
