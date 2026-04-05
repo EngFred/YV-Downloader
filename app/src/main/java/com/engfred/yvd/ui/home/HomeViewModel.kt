@@ -20,6 +20,7 @@ import com.engfred.yvd.domain.repository.YoutubeRepository
 import com.engfred.yvd.util.UrlValidator
 import com.engfred.yvd.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import javax.inject.Inject
 
@@ -113,7 +115,6 @@ class HomeViewModel @Inject constructor(
             _state.update { it.copy(urlInput = sanitized) }
         }
 
-        // Route to playlist extractor if it's a playlist URL
         if (UrlValidator.isPlaylistUrl(sanitized)) {
             loadPlaylistInfo(sanitized)
             return
@@ -166,68 +167,113 @@ class HomeViewModel @Inject constructor(
 
     fun downloadMedia(formatId: String, isAudio: Boolean) {
         val currentState = _state.value
-        val url = currentState.urlInput
-        val title = currentState.videoMetadata?.title ?: "video"
+        val url          = currentState.urlInput
+        val title        = currentState.videoMetadata?.title ?: "video"
         val thumbnailUrl = currentState.videoMetadata?.thumbnailUrl ?: ""
 
         val queueItemId = UUID.randomUUID().toString()
         val entity = DownloadQueueEntity(
-            id = queueItemId,
-            videoUrl = url,
-            videoTitle = title,
-            thumbnailUrl = thumbnailUrl,
-            formatId = formatId,
-            isAudio = isAudio,
-            workManagerId = null,
-            status = DownloadQueueStatus.QUEUED,
-            progress = 0f,
-            statusText = "Queued…",
-            errorMessage = null,
+            id             = queueItemId,
+            videoUrl       = url,
+            videoTitle     = title,
+            thumbnailUrl   = thumbnailUrl,
+            formatId       = formatId,
+            isAudio        = isAudio,
+            workManagerId  = null,
+            status         = DownloadQueueStatus.QUEUED,
+            progress       = 0f,
+            statusText     = "Queued…",
+            errorMessage   = null,
             outputFilePath = null,
-            createdAt = System.currentTimeMillis(),
-            playlistTitle = null
+            createdAt      = System.currentTimeMillis(),
+            playlistTitle  = null
         )
 
         viewModelScope.launch {
             queueRepository.enqueue(entity)
             val workId = enqueueWorker(queueItemId, url, formatId, title, isAudio)
-            queueRepository.updateStatusAndWorkId(queueItemId, DownloadQueueStatus.QUEUED, workId, "Queued…")
-            _state.update { it.copy(isFormatDialogVisible = false, queuedSnackbarMessage = "Added to download queue") }
+            queueRepository.updateStatusAndWorkId(
+                queueItemId, DownloadQueueStatus.QUEUED, workId, "Queued…"
+            )
+            _state.update {
+                it.copy(
+                    isFormatDialogVisible = false,
+                    queuedSnackbarMessage = "Added to download queue"
+                )
+            }
         }
     }
 
     // ─── Playlist Download ────────────────────────────────────────────────────
 
+    /**
+     * Enqueues every video in the current playlist for download.
+     *
+     * **Design decisions:**
+     *
+     * 1. All [DownloadQueueEntity] rows are inserted in a single `enqueueAll()` call so the
+     *    queue UI updates atomically — the user sees all items appear at once rather than
+     *    watching them trickle in one at a time.
+     *
+     * 2. WorkManager jobs are created on the IO dispatcher and their IDs written back to Room
+     *    immediately.  The actual workers are gated by the fixed-thread-pool executor cap
+     *    configured in [com.engfred.yvd.YVDApplication] (MAX_CONCURRENT_WORKERS = 3), so only
+     *    3 workers run simultaneously regardless of playlist size.  All other jobs sit in
+     *    WorkManager's internal queue — no ANR risk.
+     *
+     * 3. `createdAt` offsets ensure playlist order is preserved in the queue UI.
+     */
     fun downloadEntirePlaylist(formatId: String, isAudio: Boolean) {
         val playlist = _state.value.playlistMetadata ?: return
 
         viewModelScope.launch {
             val now = System.currentTimeMillis()
+
+            // Build all entities up front so we can insert them atomically.
             val entities = playlist.videos.mapIndexed { index, video ->
                 DownloadQueueEntity(
-                    id = UUID.randomUUID().toString(),
-                    videoUrl = video.url,
-                    videoTitle = video.title,
-                    thumbnailUrl = video.thumbnailUrl,
-                    formatId = formatId,
-                    isAudio = isAudio,
-                    workManagerId = null,
-                    status = DownloadQueueStatus.QUEUED,
-                    progress = 0f,
-                    statusText = "Queued…",
-                    errorMessage = null,
+                    id             = UUID.randomUUID().toString(),
+                    videoUrl       = video.url,
+                    videoTitle     = video.title,
+                    thumbnailUrl   = video.thumbnailUrl,
+                    formatId       = formatId,
+                    isAudio        = isAudio,
+                    workManagerId  = null,
+                    status         = DownloadQueueStatus.QUEUED,
+                    progress       = 0f,
+                    statusText     = "Queued…",
+                    errorMessage   = null,
                     outputFilePath = null,
-                    createdAt = now + index,   // unique timestamp preserves order
-                    playlistTitle = playlist.title
+                    createdAt      = now + index,  // unique offset preserves playlist order
+                    playlistTitle  = playlist.title
                 )
             }
 
+            // Single atomic Room insert — queue UI reflects all items immediately.
             queueRepository.enqueueAll(entities)
 
-            // Enqueue all WorkManager jobs and store their IDs back to Room
-            entities.forEach { entity ->
-                val workId = enqueueWorker(entity.id, entity.videoUrl, entity.formatId, entity.videoTitle, entity.isAudio)
-                queueRepository.updateStatusAndWorkId(entity.id, DownloadQueueStatus.QUEUED, workId, "Queued…")
+            // Enqueue WorkManager jobs and persist their IDs back to Room.
+            // Executed on IO dispatcher since WorkManager.enqueue() touches disk.
+            // The WorkManager executor cap (3 threads) ensures only 3 workers actually
+            // run simultaneously regardless of how many are enqueued here.
+            withContext(Dispatchers.IO) {
+                entities.forEach { entity ->
+                    val workId = enqueueWorker(
+                        queueItemId = entity.id,
+                        url         = entity.videoUrl,
+                        formatId    = entity.formatId,
+                        title       = entity.videoTitle,
+                        isAudio     = entity.isAudio
+                    )
+                    // Update each item's workManagerId so the pause/cancel actions
+                    // can target the correct WorkManager job by UUID.
+                    queueRepository.updateStatusAndWorkId(
+                        id         = entity.id,
+                        status     = DownloadQueueStatus.QUEUED,
+                        workId     = workId,
+                        statusText = "Queued…"
+                    )
+                }
             }
 
             _state.update {
@@ -241,6 +287,12 @@ class HomeViewModel @Inject constructor(
 
     // ─── WorkManager ──────────────────────────────────────────────────────────
 
+    /**
+     * Builds and submits a [DownloadWorker] request to WorkManager.
+     *
+     * @return The WorkManager request UUID as a string, stored in Room so that pause/cancel
+     *         actions can target the exact job via [WorkManager.cancelWorkById].
+     */
     private fun enqueueWorker(
         queueItemId: String,
         url: String,
@@ -249,7 +301,11 @@ class HomeViewModel @Inject constructor(
         isAudio: Boolean
     ): String {
         val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
             .setInputData(
                 workDataOf(
                     "queueItemId" to queueItemId,
@@ -261,6 +317,7 @@ class HomeViewModel @Inject constructor(
             )
             .addTag(TAG_DOWNLOAD_JOB)
             .build()
+
         workManager.enqueue(request)
         return request.id.toString()
     }
@@ -288,9 +345,12 @@ class HomeViewModel @Inject constructor(
     private fun applyIncomingUrl(url: String) {
         _state.update {
             it.copy(
-                urlInput = url, urlError = null,
-                videoMetadata = null, playlistMetadata = null,
-                isPlaylistUrl = false, error = null
+                urlInput      = url,
+                urlError      = null,
+                videoMetadata = null,
+                playlistMetadata = null,
+                isPlaylistUrl = false,
+                error         = null
             )
         }
         loadVideoInfo(url)
@@ -301,14 +361,17 @@ class HomeViewModel @Inject constructor(
     fun showFormatDialog() {
         if (_state.value.videoMetadata != null) _state.update { it.copy(isFormatDialogVisible = true) }
     }
+
     fun hideFormatDialog() = _state.update { it.copy(isFormatDialogVisible = false) }
 
     fun showPlaylistFormatDialog() {
         if (_state.value.playlistMetadata != null) _state.update { it.copy(isPlaylistFormatDialogVisible = true) }
     }
+
     fun hidePlaylistFormatDialog() = _state.update { it.copy(isPlaylistFormatDialogVisible = false) }
 
     fun showThemeDialog() = _state.update { it.copy(isThemeDialogVisible = true) }
+
     fun hideThemeDialog() = _state.update { it.copy(isThemeDialogVisible = false) }
 
     fun updateTheme(newTheme: AppTheme) {
@@ -319,5 +382,6 @@ class HomeViewModel @Inject constructor(
     }
 
     fun clearError() = _state.update { it.copy(error = null) }
+
     fun clearQueuedMessage() = _state.update { it.copy(queuedSnackbarMessage = null) }
 }

@@ -55,6 +55,17 @@ import javax.inject.Inject
  * - All video and audio streams are filtered to MP4/M4A only (WebM excluded by design).
  * - YouTube CDN bypass: appending `&range=start-end` to CDN URLs alongside the HTTP `Range`
  *   header bypasses YouTube's per-connection throttling on adaptive streams.
+ *
+ * ## Bug fix — v1.x: isFileComplete() replaces fileAlreadyDownloaded()
+ * The old helper returned `true` for any file > 1 KB on disk. Because parallel downloads
+ * pre-allocate the full output file before any bytes are written, a file that is 0 % complete
+ * occupies the full expected size on disk.  Retrying after a network interruption therefore
+ * hit the early-return path, emitted DownloadStatus.Success on the corrupt partial file, and
+ * produced audio that played for only a few seconds (or showed 0:00 duration).
+ *
+ * The fix: a file is only considered complete when it is > 1 KB AND there is no saved
+ * ResumeState for its path.  A saved ResumeState is definitive proof that a previous session
+ * was interrupted before all chunks were written.
  */
 class YoutubeRepositoryImpl @Inject constructor(
     private val context: Context,
@@ -114,12 +125,8 @@ class YoutubeRepositoryImpl @Inject constructor(
                     val videoContentLength = stream.itagItem?.contentLength ?: -1L
 
                     val fileSize = if (videoContentLength > 0L) {
-                        // Exact bytes for the video track + exact/estimated audio track.
                         "%.1f MB".format((videoContentLength + bestAudioContentLength).toDouble() / (1024.0 * 1024.0))
                     } else {
-                        // No exact length — estimate using average bitrate approximation.
-                        // stream.bitrate is the peak/encoded bitrate; multiplying by 0.70 gives a realistic
-                        // average that matches actual compressed file sizes much more closely.
                         val estimatedVideoBytes = (stream.bitrate.toLong() * 0.70 * durationSeconds / 8).toLong()
                         "~%.1f MB".format((estimatedVideoBytes + bestAudioContentLength).toDouble() / (1024.0 * 1024.0))
                     }
@@ -146,8 +153,6 @@ class YoutubeRepositoryImpl @Inject constructor(
                         bitrate = "${stream.averageBitrate}kbps",
                         fileSize = formatFileSize(
                             itagContentLength = stream.itagItem?.contentLength ?: -1L,
-                            // averageBitrate is kbps — convert to bps for the estimate.
-                            // Previously used stream.bitrate (peak encoded) which overshoots by ~20-40%.
                             bitrateBps = stream.averageBitrate.toLong() * 1000L,
                             durationSec = durationSeconds
                         )
@@ -189,18 +194,29 @@ class YoutubeRepositoryImpl @Inject constructor(
                             if (d <= 0L) "--:--"
                             else "%d:%02d".format(d / 60, d % 60)
                         }
-                        videos.add(PlaylistVideoItem(url = item.url, title = item.name, thumbnailUrl = thumb, duration = dur))
+                        videos.add(
+                            PlaylistVideoItem(
+                                url = item.url,
+                                title = item.name,
+                                thumbnailUrl = thumb,
+                                duration = dur
+                            )
+                        )
                     }
                 }
                 if (!page.hasNextPage()) break
                 page = extractor.getPage(page.nextPage!!)
             }
 
-            emit(Resource.Success(PlaylistMetadata(
-                title = extractor.name,
-                videoCount = videos.size,
-                videos = videos
-            )))
+            emit(
+                Resource.Success(
+                    PlaylistMetadata(
+                        title = extractor.name,
+                        videoCount = videos.size,
+                        videos = videos
+                    )
+                )
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Playlist fetch failed: ${e.message}", e)
             emit(Resource.Error("Could not load playlist: ${e.localizedMessage}"))
@@ -266,7 +282,18 @@ class YoutubeRepositoryImpl @Inject constructor(
         val ext = stream.format?.suffix ?: "m4a"
         val finalFile = File(appDir, "${cleanTitle}_${stream.averageBitrate}kbps.$ext")
 
-        if (fileAlreadyDownloaded(finalFile)) {
+        // ── FIX: Use isFileComplete() instead of the old fileAlreadyDownloaded() ──
+        //
+        // The old helper returned true for any file > 1 KB.  Because downloadStreamParallel
+        // pre-allocates the full output file via RandomAccessFile.setLength() before any bytes
+        // are written, a file that is 0 % downloaded still occupies its full expected size on
+        // disk.  Retrying after data exhaustion therefore produced a corrupt file that played
+        // for only a few seconds (or showed 0:00 duration).
+        //
+        // isFileComplete() additionally verifies that NO ResumeState is saved for this file.
+        // A saved state is definitive proof the download was interrupted before completion.
+        if (isFileComplete(finalFile)) {
+            Log.d(TAG, "Audio already complete, skipping: ${finalFile.name}")
             trySend(DownloadStatus.Progress(100f, "Already downloaded"))
             trySend(DownloadStatus.Success(finalFile))
             return
@@ -291,19 +318,33 @@ class YoutubeRepositoryImpl @Inject constructor(
         val ext = stream.format?.suffix ?: "mp4"
         val finalFile = File(appDir, "${cleanTitle}_${stream.resolution}.$ext")
 
-        if (fileAlreadyDownloaded(finalFile)) {
-            trySend(DownloadStatus.Progress(100f, "Already downloaded"))
-            trySend(DownloadStatus.Success(finalFile))
-            return
-        }
-
         if (!stream.isVideoOnly) {
             // Pre-merged stream (typically ≤ 360p). Single-track download.
+            //
+            // Apply the same isFileComplete() guard here — pre-merged streams are downloaded
+            // directly to finalFile, so the same partial-file false-positive bug applies.
+            if (isFileComplete(finalFile)) {
+                Log.d(TAG, "Video already complete, skipping: ${finalFile.name}")
+                trySend(DownloadStatus.Progress(100f, "Already downloaded"))
+                trySend(DownloadStatus.Success(finalFile))
+                return
+            }
             downloadStreamParallel(stream.content, finalFile, this, "Downloading video…")
             trySend(DownloadStatus.Success(finalFile))
+
         } else {
             // Adaptive stream (720p, 1080p+): separate video+audio, then mux.
-            // Temp files go in cacheDir — OS-managed, no extra storage permission needed.
+            //
+            // For adaptive downloads the final file only exists AFTER muxing completes, so the
+            // old fileAlreadyDownloaded() check was already safe here — an interrupted mux leaves
+            // no output file.  Temp files go in cacheDir and are always cleaned up in `finally`.
+            if (isFileComplete(finalFile)) {
+                Log.d(TAG, "Muxed video already complete, skipping: ${finalFile.name}")
+                trySend(DownloadStatus.Progress(100f, "Already downloaded"))
+                trySend(DownloadStatus.Success(finalFile))
+                return
+            }
+
             val cacheDir = context.cacheDir
             val ts = System.currentTimeMillis()
             val videoTemp = File(cacheDir, "yvd_v_${ts}.$ext")
@@ -333,7 +374,9 @@ class YoutubeRepositoryImpl @Inject constructor(
                 trySend(DownloadStatus.Success(finalFile))
 
             } finally {
-                // Always clean up temp files and their resume states.
+                // Always clean up temp files and their resume states, even on failure.
+                // The final muxed file is only created on success, so an interrupted mux
+                // leaves no corrupt output — the next retry starts a fresh mux.
                 videoTemp.delete()
                 audioTemp.delete()
                 resumeStateStore.clearState(cacheDir, videoTemp.absolutePath)
@@ -396,7 +439,9 @@ class YoutubeRepositoryImpl @Inject constructor(
             val doneCount = savedState.chunks.count { it.completed }
             Log.d(TAG, "Resuming: $doneCount/${savedState.chunks.size} chunks already done")
             chunks = savedState.chunks
-            // Ensure the file is pre-allocated if it was lost between sessions.
+            // Re-allocate if the file was lost or truncated between sessions.
+            // setLength() on an existing partial file preserves bytes already written
+            // and extends with zeros — completed chunk data is intact at its original offsets.
             if (!file.exists() || file.length() != totalLength) {
                 RandomAccessFile(file, "rw").use { it.setLength(totalLength) }
             }
@@ -451,12 +496,12 @@ class YoutubeRepositoryImpl @Inject constructor(
                 jobs.awaitAll()
             }
 
-            Log.d(TAG, "Parallel download complete: ${file.name}")
+            Log.d(TAG, "Parallel download complete: ${file.name} (${file.length()}B)")
             resumeStateStore.clearState(context.cacheDir, downloadId)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Parallel download failed — state preserved for resume: ${e.message}")
-            // Do NOT delete the partial file here; the state file enables resuming.
+            // State file is deliberately kept so the next invocation can resume.
+            Log.e(TAG, "Parallel download interrupted — resume state preserved: ${e.message}")
             throw e
         }
     }
@@ -476,9 +521,6 @@ class YoutubeRepositoryImpl @Inject constructor(
      *
      * - All other servers: send a standard `Range: bytes=start-end` HTTP header and expect
      *   either 206 Partial Content or 200 OK.
-     *
-     * In both cases [raf] seeks to [ChunkState.start] before writing, so bytes land at
-     * the correct absolute position in the pre-allocated output file.
      */
     private fun downloadChunk(
         url: String,
@@ -497,7 +539,6 @@ class YoutubeRepositoryImpl @Inject constructor(
 
         if (isYouTubeCdn) {
             // YouTube CDN: use URL range param only — no Range header.
-            // The CDN streams exactly [start..end] bytes; response body begins at offset 0.
             requestBuilder.url(appendYouTubeRangeParam(url, chunk.start, chunk.end))
         } else {
             // Generic CDN/server: standard HTTP Range header.
@@ -512,9 +553,6 @@ class YoutubeRepositoryImpl @Inject constructor(
 
         try {
             val response = downloadClient.newCall(request).execute()
-            // 200 OK  — server returned full (or ranged) content.
-            // 206 Partial Content — correct for Range-header requests.
-            // Anything else is a real failure.
             if (!response.isSuccessful && response.code != 206) {
                 throw IOException("Chunk $chunkIndex failed with HTTP ${response.code}")
             }
@@ -527,7 +565,6 @@ class YoutubeRepositoryImpl @Inject constructor(
                 while (input.read(buffer).also { bytesRead = it } != -1) {
                     raf.write(buffer, 0, bytesRead)
                     val total = atomicProgress.addAndGet(bytesRead.toLong())
-                    // Throttle UI updates to ~every 256 KB to avoid flooding the main thread.
                     if (totalFileLength > 0 && total % PROGRESS_REPORT_EVERY_BYTES < bytesRead) {
                         val pct = (total.toFloat() / totalFileLength * 100f).coerceIn(0f, 100f)
                         flow.trySend(DownloadStatus.Progress(pct, "$statusPrefix ${pct.toInt()}%"))
@@ -548,7 +585,6 @@ class YoutubeRepositoryImpl @Inject constructor(
 
     /**
      * Used for small files or when [totalLength] is unknown (server didn't send Content-Length).
-     * Also used when Range headers are not supported by the server.
      */
     private fun downloadSingleThread(
         url: String,
@@ -589,8 +625,8 @@ class YoutubeRepositoryImpl @Inject constructor(
     // ─── Retry Helper ─────────────────────────────────────────────────────────
 
     /**
-     * Runs [block] up to [times] times. Uses exponential backoff (1s, 2s, 3s…) between attempts.
-     * Lets the final attempt throw so the caller can decide what to do.
+     * Runs [block] up to [times] times with exponential backoff (1s, 2s, 3s…) between attempts.
+     * Propagates the exception from the final attempt.
      */
     private suspend fun retryWithBackoff(times: Int, block: () -> Unit) {
         repeat(times - 1) { attempt ->
@@ -601,7 +637,7 @@ class YoutubeRepositoryImpl @Inject constructor(
                 delay(1_000L * (attempt + 1))
             }
         }
-        block() // Final attempt — propagate any exception.
+        block()
     }
 
     // ─── Muxing ───────────────────────────────────────────────────────────────
@@ -637,7 +673,7 @@ class YoutubeRepositoryImpl @Inject constructor(
             copyTrack(audioExtractor, muxer, muxATrack, buffer, info)
 
         } catch (e: Exception) {
-            File(outPath).delete() // Don't leave a corrupt output file.
+            File(outPath).delete()
             Log.e(TAG, "Muxing failed: ${e.message}", e)
             throw e
         } finally {
@@ -677,19 +713,31 @@ class YoutubeRepositoryImpl @Inject constructor(
     // ─── Utility Helpers ──────────────────────────────────────────────────────
 
     /**
+     * Returns `true` only when the output file can be considered fully downloaded from a
+     * previous session — i.e., it has meaningful size on disk AND there is no pending
+     * [ResumeStateStore] entry for its path.
+     *
+     * **Why the resume-state check is mandatory:**
+     * [downloadStreamParallel] pre-allocates the complete output file via
+     * `RandomAccessFile.setLength(totalLength)` before writing a single byte.  This means a
+     * file that is 0 % downloaded occupies its full expected size on disk, making a naive
+     * size-only check unreliable.  A saved [ResumeState] is definitive proof that the
+     * download was interrupted before all chunks completed, regardless of the file's on-disk
+     * size.
+     *
+     * Replaces the old `fileAlreadyDownloaded()` helper which lacked this guard and caused
+     * partial files to be reported as successfully downloaded on retry.
+     */
+    private fun isFileComplete(file: File): Boolean {
+        if (!file.exists() || file.length() <= 1_024L) return false
+        // A non-null resume state means at least one chunk is still incomplete.
+        val hasPendingResumeState =
+            resumeStateStore.loadState(context.cacheDir, file.absolutePath) != null
+        return !hasPendingResumeState
+    }
+
+    /**
      * Returns the display file size string shown to the user before a download starts.
-     *
-     * Priority:
-     * 1. [itagContentLength] — the exact byte count embedded in YouTube's itag metadata
-     *    (sourced directly from the player response JSON). This is the ground truth: it matches
-     *    what the CDN will actually deliver and is what YouTube's own client displays.
-     * 2. Bitrate × duration estimate — only used when the itag carries no content-length
-     *    (e.g. older muxed streams where `itagItem` is null or `contentLength == -1`).
-     *    Results are prefixed with `~` so users can tell it's an approximation.
-     *
-     * Previously only the estimate path was used, which consistently overshot real sizes by
-     * 20–40% because `stream.bitrate` reflects the *peak/encoded* bitrate rather than the
-     * true average bitrate of the compressed file.
      */
     private fun formatFileSize(
         itagContentLength: Long,
@@ -702,12 +750,6 @@ class YoutubeRepositoryImpl @Inject constructor(
         return estimateFileSize(bitrateBps, durationSec)
     }
 
-    /**
-     * Fallback size estimate from bitrate × duration.
-     *
-     * Only called when [formatFileSize] cannot source an exact [itagContentLength].
-     * The `~` prefix signals to the user that this is an approximation, not a guaranteed size.
-     */
     private fun estimateFileSize(bitrateBps: Long, durationSec: Long): String {
         if (bitrateBps <= 0 || durationSec <= 0) return "Unknown"
         val bytes = (bitrateBps * durationSec) / 8
@@ -716,23 +758,12 @@ class YoutubeRepositoryImpl @Inject constructor(
 
     /**
      * Appends YouTube's server-side range parameter to a YouTube CDN URL.
-     *
-     * Only call this for `googlevideo.com` URLs. Do NOT combine with an HTTP `Range` header —
-     * the CDN returns HTTP 416 because the header's offsets are out-of-bounds within
-     * the already byte-scoped response body that the URL param creates.
+     * Only call this for `googlevideo.com` URLs.
      */
     private fun appendYouTubeRangeParam(url: String, start: Long, end: Long): String {
         val separator = if (url.contains("?")) "&" else "?"
         return "${url}${separator}range=${start}-${end}"
     }
-
-    /**
-     * Returns true if the file exists and has a non-trivial size (> 1 KB).
-     * We use 1 KB rather than 0 to guard against leftover zero-byte files from crashed sessions.
-     */
-    private fun fileAlreadyDownloaded(file: File): Boolean =
-        file.exists() && file.length() > 1_024L
-
 
     /**
      * Resolves quality descriptor strings (used by playlist downloads) to a real
@@ -788,7 +819,11 @@ class YoutubeRepositoryImpl @Inject constructor(
     // ─── Constants ────────────────────────────────────────────────────────────
 
     companion object {
-        /** Number of parallel download threads per file. */
+        /**
+         * Number of parallel download threads per file.
+         * WorkManager's thread pool (set to 3 in YVDApplication) is the outer concurrency
+         * gate, so effective max concurrent network threads = 3 workers × 4 threads = 12.
+         */
         private const val THREAD_COUNT = 4
 
         /** Read/write I/O buffer per thread. 64 KB balances throughput vs GC pressure. */

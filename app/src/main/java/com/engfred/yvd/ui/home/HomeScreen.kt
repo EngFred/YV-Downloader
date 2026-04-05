@@ -46,7 +46,6 @@ fun HomeScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // State to handle the mobile data warning flow
     var pendingPlaylistFormat by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     var showDataWarningDialog by remember { mutableStateOf(false) }
 
@@ -139,7 +138,6 @@ fun HomeScreen(
         ) {
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Input Field
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -283,11 +281,12 @@ fun HomeScreen(
         )
     }
 
+    // FIX: Guard Dialog with simplified text and shorter button.
     if (state.showActiveDownloadGuardDialog) {
         ConfirmationDialog(
             title = "Downloads in Progress",
-            text = "You have ${state.activeDownloadCount} active download(s). Load the new link anyway? Downloads will continue in the queue.",
-            confirmText = "Load New Link",
+            text = "You have active download(s) in the background. Load the new link anyway?",
+            confirmText = "Proceed",
             onConfirm = { viewModel.confirmReplaceWithPendingUrl() },
             onDismiss  = { viewModel.dismissGuardDialog() }
         )
@@ -298,7 +297,7 @@ fun HomeScreen(
             playlistMetadata = state.playlistMetadata!!,
             onDismiss = { viewModel.hidePlaylistFormatDialog() },
             onFormatSelected = { formatId, isAudio ->
-                viewModel.hidePlaylistFormatDialog() // Hide sheet first
+                viewModel.hidePlaylistFormatDialog()
                 if (NetworkUtil.isUsingMobileData(context)) {
                     pendingPlaylistFormat = formatId to isAudio
                     showDataWarningDialog = true
@@ -309,12 +308,12 @@ fun HomeScreen(
         )
     }
 
-    // New Data Warning Dialog
+    // FIX: Playlist Data Warning Dialog with shorter button
     if (showDataWarningDialog && pendingPlaylistFormat != null) {
         ConfirmationDialog(
             title = "Mobile Data Warning",
-            text = "You are currently using mobile data. Downloading an entire playlist (${state.playlistMetadata?.videoCount ?: 0} videos) may consume a significant amount of your data plan.\n\nDo you want to proceed?",
-            confirmText = "Download Anyway",
+            text = "You are on mobile data. Downloading an entire playlist (${state.playlistMetadata?.videoCount ?: 0} videos) may consume significant data.\n\nDo you want to proceed?",
+            confirmText = "Proceed",
             onConfirm = {
                 viewModel.downloadEntirePlaylist(pendingPlaylistFormat!!.first, pendingPlaylistFormat!!.second)
                 showDataWarningDialog = false

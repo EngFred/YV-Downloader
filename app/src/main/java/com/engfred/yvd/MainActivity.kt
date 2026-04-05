@@ -38,6 +38,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var checkForUpdateUseCase: CheckForUpdateUseCase
 
+    // FIX: State variable to track the last clipboard text we processed
+    private var lastProcessedClipboardText: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
@@ -67,17 +70,6 @@ class MainActivity : ComponentActivity() {
                 var showUpdateDialog by remember { mutableStateOf(false) }
 
                 LaunchedEffect(Unit) {
-//                    // 🔴 MOCK UPDATE FOR TESTING🔴
-//                    delay(1000)
-//                    updateInfo = UpdateInfo(
-//                        latestVersion = "9.9.9",
-//                        releaseNotes = "🚀 Massive UI/UX Redesign!\n✨ Added floating navigation bar.\n😎 Premium glassmorphism effects.\n🐛 Fixed minor bugs under the hood.",
-//                        downloadUrl = "https://github.com/EngFred/YV-Downloader",
-//                        htmlUrl = "https://github.com/EngFred/YV-Downloader"
-//                    )
-//                    showUpdateDialog = true
-//                    // 🔴 ----------------------- 🔴
-
                     // 1. Instantly check cached updates
                     val cachedInfo = PreferencesHelper.getCachedUpdateInfo(this@MainActivity)
                     if (cachedInfo != null && checkForUpdateUseCase.isNewerVersion(cachedInfo.latestVersion, BuildConfig.VERSION_NAME)) {
@@ -121,8 +113,6 @@ class MainActivity : ComponentActivity() {
                                     onFinished = {
                                         PreferencesHelper.setOnboardingDone(this@MainActivity)
                                         onboardingDone = true
-                                        // Show the bubble permission dialog only AFTER
-                                        // the user completes onboarding for the very first time.
                                         showBubblePermissionDialogIfNeeded()
                                     }
                                 )
@@ -145,9 +135,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Only show the bubble permission dialog here if onboarding is already done
-        // (returning users who haven't granted the permission yet).
-        // New/first-time users will see it via the onFinished callback in OnboardingScreen above.
         if (PreferencesHelper.isOnboardingDone(this)) {
             showBubblePermissionDialogIfNeeded()
         }
@@ -155,10 +142,6 @@ class MainActivity : ComponentActivity() {
         handleIncomingIntent(intent)
     }
 
-    /**
-     * Shows the "Enable Floating Bubble" dialog only if the overlay permission
-     * has not been granted yet. Safe to call multiple times — no-ops if already granted.
-     */
     private fun showBubblePermissionDialogIfNeeded() {
         if (BubblePermissionHelper.canDrawOverlays(this)) return
         android.app.AlertDialog.Builder(this)
@@ -172,8 +155,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         AppLifecycleTracker.isInForeground = true
-        // Stop the FloatingBubbleService entirely when the app comes to the foreground.
-        // It will be restarted by openYoutube() via ACTION_SHOW when the user taps the FAB.
         stopService(Intent(this, FloatingBubbleService::class.java))
     }
 
@@ -183,11 +164,15 @@ class MainActivity : ComponentActivity() {
 
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
         val clip = clipboard.primaryClip?.getItemAt(0)?.text?.toString()?.trim()
+
+        // FIX: Only process the clipboard if it is a valid YouTube link AND it is
+        // completely different from the last link we processed.
         if (
             !clip.isNullOrBlank() &&
             UrlValidator.isValidYouTubeUrl(UrlValidator.sanitize(clip)) &&
-            clip != homeViewModel.state.value.urlInput
+            clip != lastProcessedClipboardText
         ) {
+            lastProcessedClipboardText = clip // Remember this link
             homeViewModel.handleIncomingUrl(clip)
         }
     }
@@ -209,7 +194,10 @@ class MainActivity : ComponentActivity() {
                 if (intent.type == "text/plain") {
                     intent.getStringExtra(Intent.EXTRA_TEXT)
                         ?.takeIf { it.isNotBlank() }
-                        ?.let { homeViewModel.handleIncomingUrl(it) }
+                        ?.let { clip ->
+                            lastProcessedClipboardText = clip // Remember this link
+                            homeViewModel.handleIncomingUrl(clip)
+                        }
                 }
             }
         }
