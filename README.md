@@ -91,3 +91,15 @@ The Repository uses callbackFlow to emit a sealed DownloadStatus class. This all
 
 ### 4. Secure File Access
 The app targets Android 10+ (Scoped Storage) but utilizes FileProvider to securely share the downloaded file Uri with external video player apps. It grants temporary read permissions via Intent.FLAG_GRANT_READ_URI_PERMISSION, ensuring the app remains secure while interacting with the Android ecosystem.
+
+---
+
+## Third-Party Notices
+
+YVD bundles open-source components under the GNU Lesser General Public License. Source code for the LGPL components is available as follows:
+
+* **FFmpeg** (`com.arthenica.ffmpegkit` API, compiled with `libmp3lame`) — bundled as the maintained `ffmpeg-kit` for Android (Maven Central `dev.ffmpegkit-maintained:ffmpeg-kit-audio`). Licensed under **LGPL v3.0**. Source and build scripts: <https://github.com/ffmpegkit-maintained/ffmpeg> (upstream: <https://github.com/arthenica/ffmpeg-kit>).
+* **LAME MP3 encoder** — used directly via the `jaygoo Mp3Converter` JNI wrapper on 32-bit devices and inside FFmpeg otherwise. Licensed under **LGPL v2.0**: <https://lame.sourceforge.io/>
+* **JAudioTagger** for audio metadata/album-art writing ([`AdrienPoupa/jaudiotagger`](https://github.com/AdrienPoupa/jaudiotagger)).
+
+The modifications necessary to re-link these libraries against a different build of the application are achievable by rebuilding from the stated sources.
