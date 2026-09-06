@@ -61,6 +61,14 @@
 -keep class androidx.work.** { *; }
 -dontwarn androidx.work.**
 
+# ─── LAME MP3 encoder (Jay-Goo Mp3Converter) ─────────────────────────────────
+-keep class jaygoo.library.converter.** { *; }
+-dontwarn jaygoo.library.converter.**
+
+# ─── JAudioTagger (audio tag/album-art writer) ────────────────────────────────
+-keep class org.jaudiotagger.** { *; }
+-dontwarn org.jaudiotagger.**
+
 # ─── Kotlin Serialization (if used anywhere) ──────────────────────────────────
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.AnnotationsKt

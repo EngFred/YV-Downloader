@@ -11,6 +11,7 @@ import com.engfred.yvd.common.Resource
 import com.engfred.yvd.data.local.ChunkState
 import com.engfred.yvd.data.local.ResumeStateStore
 import com.engfred.yvd.data.network.DownloaderImpl
+import com.engfred.yvd.domain.model.AudioContainer
 import com.engfred.yvd.domain.model.AudioFormat
 import com.engfred.yvd.domain.model.DownloadStatus
 import com.engfred.yvd.domain.model.PlaylistMetadata
@@ -18,6 +19,9 @@ import com.engfred.yvd.domain.model.PlaylistVideoItem
 import com.engfred.yvd.domain.model.VideoFormat
 import com.engfred.yvd.domain.model.VideoMetadata
 import com.engfred.yvd.domain.repository.YoutubeRepository
+import com.engfred.yvd.util.AudioTagWriter
+import com.engfred.yvd.util.FilenameParser
+import com.engfred.yvd.util.Mp3Transcoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -255,9 +259,11 @@ class YoutubeRepositoryImpl @Inject constructor(
         url: String,
         formatId: String,
         title: String,
-        isAudio: Boolean
+        isAudio: Boolean,
+        container: AudioContainer?,
+        bitrateKbps: Int?
     ): Flow<DownloadStatus> = callbackFlow {
-        Log.d(TAG, "Download requested: '$title' | audio=$isAudio | format=$formatId")
+        Log.d(TAG, "Download requested: '$title' | audio=$isAudio | format=$formatId | container=$container")
         try {
             trySend(DownloadStatus.Progress(0f, "Initializing…"))
 
@@ -269,28 +275,26 @@ class YoutubeRepositoryImpl @Inject constructor(
                 "YVDownloader"
             ).also { if (!it.exists()) it.mkdirs() }
 
-            // ── FIX 4: Disambiguate titles that share the same 50-char prefix ──────────
-            // Two playlist items with nearly identical titles (e.g. "Episode 1 — Season 3 …"
-            // vs "Episode 2 — Season 3 …" when both truncate to the same first 50 chars) would
-            // otherwise produce the same output filename and corrupt each other's download.
-            val sanitised = title
-                .replace(Regex("[^\\w.\\- ]"), "_")
-                .trim()
-                .replace(Regex("\\s+"), "_")
+            val track = FilenameParser.parse(extractor.name, extractor.uploaderName)
 
-            val cleanTitle = if (sanitised.length > 50) {
-                // Keep first 44 chars + 6-char hex hash of the FULL sanitised title.
-                // This guarantees uniqueness without making filenames unreadably long.
-                val hash = sanitised.hashCode().toLong().and(0xFFFFFFL).toString(16).padStart(6, '0')
-                "${sanitised.take(44)}_$hash"
+            // MP3 ignores the ITAG (always the best stream), so skip descriptor resolution.
+            val (resolvedFormatId, resolvedIsAudio) = if (container == AudioContainer.MP3) {
+                formatId to true
             } else {
-                sanitised
+                resolveStreamForVideo(extractor, formatId, isAudio)
             }
 
-            val (resolvedFormatId, resolvedIsAudio) = resolveStreamForVideo(extractor, formatId, isAudio)
             if (resolvedIsAudio) {
-                handleAudioDownload(extractor, resolvedFormatId, cleanTitle, appDir)
+                handleAudioDownload(
+                    extractor = extractor,
+                    formatId = resolvedFormatId,
+                    container = container ?: AudioContainer.M4A,
+                    bitrateKbps = bitrateKbps,
+                    track = track,
+                    appDir = appDir
+                )
             } else {
+                val cleanTitle = FilenameParser.sanitize(extractor.name)
                 handleVideoDownload(extractor, resolvedFormatId, cleanTitle, appDir)
             }
 
@@ -309,25 +313,110 @@ class YoutubeRepositoryImpl @Inject constructor(
     private suspend fun ProducerScope<DownloadStatus>.handleAudioDownload(
         extractor: YoutubeStreamExtractor,
         formatId: String,
-        cleanTitle: String,
+        container: AudioContainer,
+        bitrateKbps: Int?,
+        track: FilenameParser.TrackName,
         appDir: File
     ) {
-        val stream = extractor.audioStreams.find { it.itag.toString() == formatId }
-            ?: throw Exception("Audio stream not found (formatId=$formatId)")
+        val isMp3 = container == AudioContainer.MP3
 
-        val ext = stream.format?.suffix ?: "m4a"
-        val finalFile = File(appDir, "${cleanTitle}_${stream.averageBitrate}kbps.$ext")
+        val stream = if (isMp3) {
+            // MP3 ignores the ITAG and always takes the highest-bitrate audio stream.
+            extractor.audioStreams.maxByOrNull { it.averageBitrate }
+                ?: throw Exception("No audio stream found")
+        } else {
+            extractor.audioStreams.find { it.itag.toString() == formatId }
+                ?: throw Exception("Audio stream not found (formatId=$formatId)")
+        }
 
-        if (isFileComplete(finalFile)) {
+        val baseName = FilenameParser.buildAudioBaseName(track)
+        val finalFile = File(appDir, "$baseName.${container.extension}")
+
+        // M4A is resumable via ResumeStateStore; an already-complete file can be skipped.
+        if (!isMp3 && isFileComplete(finalFile)) {
             Log.d(TAG, "Audio already complete, skipping: ${finalFile.name}")
             trySend(DownloadStatus.Progress(100f, "Already downloaded"))
             trySend(DownloadStatus.Success(finalFile))
             return
         }
 
-        downloadStreamParallel(stream.content, finalFile, this, "Downloading audio…")
-        trySend(DownloadStatus.Success(finalFile))
+        if (!isMp3) {
+            trySend(DownloadStatus.Progress(0f, "Downloading audio…"))
+            downloadStreamParallel(stream.content, finalFile, this, "Downloading audio…")
+            applyAudioTags(finalFile, track, bestThumbnailUrl(extractor))
+            trySend(DownloadStatus.Success(finalFile))
+            return
+        }
+
+        // ── MP3 path: download AAC to a cache temp, then transcode in place ──────────
+        val cacheDir = context.cacheDir
+        val m4aTemp = File(cacheDir, "yvd_mp3src_${System.currentTimeMillis()}.m4a")
+        try {
+            trySend(DownloadStatus.Progress(0f, "Downloading audio…"))
+            downloadStreamParallel(stream.content, m4aTemp, this, "Downloading audio…")
+
+            val targetBitrate = bitrateKbps ?: DEFAULT_MP3_BITRATE
+            trySend(DownloadStatus.Progress(0f, "Converting to MP3 ($targetBitrate kbps)…"))
+            val converted = Mp3Transcoder().transcode(
+                inputPath = m4aTemp.absolutePath,
+                outputPath = finalFile.absolutePath,
+                bitrateKbps = targetBitrate,
+                progress = { pct ->
+                    trySend(DownloadStatus.Progress(pct.coerceIn(0f, 99f), "Converting to MP3… ${pct.toInt()}%"))
+                }
+            )
+            if (!converted) {
+                throw Exception("MP3 conversion failed — unsupported audio format")
+            }
+
+            applyAudioTags(finalFile, track, bestThumbnailUrl(extractor))
+            trySend(DownloadStatus.Success(finalFile))
+        } finally {
+            m4aTemp.delete()
+            resumeStateStore.clearState(cacheDir, m4aTemp.absolutePath)
+            // Remove a partial/failed MP3 so the next attempt starts clean.
+            if (!finalFile.exists() || finalFile.length() == 0L) finalFile.delete()
+        }
     }
+
+    /**
+     * Best-effort tagging + album art for finished audio files.
+     * Never throws — metadata failure must not fail the download.
+     */
+    private suspend fun ProducerScope<DownloadStatus>.applyAudioTags(
+        file: File,
+        track: FilenameParser.TrackName,
+        thumbnailUrl: String
+    ) {
+        trySend(DownloadStatus.Progress(100f, "Finalizing…"))
+        if (file.extension.equals("mp4", ignoreCase = true) || file.extension.equals("webm", ignoreCase = true)) {
+            return
+        }
+
+        val artworkBytes = withContext(Dispatchers.IO) {
+            runCatching { fetchArtwork(thumbnailUrl) }.getOrNull()
+        }
+        val jpeg = artworkBytes?.let { AudioTagWriter.prepareArtwork(it) }
+
+        runCatching {
+            AudioTagWriter.embed(file, track.artist, track.song, jpeg)
+        }.onFailure {
+            Log.w(TAG, "Tagging/artwork skipped for ${file.name}: ${it.message}")
+        }
+    }
+
+    private fun fetchArtwork(url: String): ByteArray? {
+        if (url.isBlank()) return null
+        val response = downloadClient.newCall(Request.Builder().url(url).build()).execute()
+        return response.use {
+            if (it.isSuccessful) it.body?.bytes() else null
+        }
+    }
+
+    private fun bestThumbnailUrl(extractor: YoutubeStreamExtractor): String =
+        extractor.thumbnails.maxByOrNull { it.width }?.url
+            ?: extractor.thumbnails.firstOrNull()?.url
+            ?: ""
 
     // ─── Video Download ───────────────────────────────────────────────────────
 
@@ -867,6 +956,7 @@ class YoutubeRepositoryImpl @Inject constructor(
         private const val SMALL_FILE_THRESHOLD = 512 * 1024L
         private const val PROGRESS_REPORT_EVERY_BYTES = 256 * 1024L
         private const val RETRY_COUNT = 3
+        private const val DEFAULT_MP3_BITRATE = 192
 
         const val QUALITY_BEST  = "QUALITY_BEST"
         const val QUALITY_720P  = "QUALITY_720P"

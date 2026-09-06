@@ -22,6 +22,15 @@ android {
         versionName = "2.3.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        externalNativeBuild {
+            cmake {
+                // LAME is pure C99; silence the flood of warnings from the old tree.
+                cFlags += "-O2 -w"
+                cppFlags += "-O2 -w"
+                arguments += "-DANDROID_STL=c++_static"
+            }
+        }
     }
 
     buildTypes {
@@ -46,6 +55,13 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
     packaging {
         jniLibs {
@@ -89,6 +105,9 @@ dependencies {
     implementation(libs.newpipe.extractor)
     implementation(libs.okhttp)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
+
+    // MP3 encoding (LAME) + audio tagging
+    implementation(libs.jaudiotagger)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)

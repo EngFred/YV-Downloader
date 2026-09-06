@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.engfred.yvd.domain.model.FormatSelection
 import com.engfred.yvd.ui.components.*
 import com.engfred.yvd.util.NetworkUtil
 import com.engfred.yvd.util.openYoutube
@@ -49,7 +50,7 @@ fun HomeScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     // State to pause downloads while we ask for permissions or data warnings
-    var pendingSingleFormat by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    var pendingSingleFormat by remember { mutableStateOf<FormatSelection?>(null) }
     var pendingPlaylistFormat by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     var showDataWarningDialog by remember { mutableStateOf(false) }
 
@@ -59,8 +60,8 @@ fun HomeScreen(
         }
 
         // 1. Resume single download after permission prompt closes
-        pendingSingleFormat?.let { (formatId, isAudio) ->
-            viewModel.downloadMedia(formatId, isAudio)
+        pendingSingleFormat?.let { selection ->
+            viewModel.downloadMedia(selection)
             pendingSingleFormat = null
         }
 
@@ -294,14 +295,14 @@ fun HomeScreen(
         FormatSelectionSheet(
             metadata = state.videoMetadata!!,
             onDismiss = { viewModel.hideFormatDialog() },
-            onFormatSelected = { formatId, isAudio ->
+            onFormatSelected = { selection ->
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                     ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
                 ) {
-                    pendingSingleFormat = formatId to isAudio
+                    pendingSingleFormat = selection
                     permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                 } else {
-                    viewModel.downloadMedia(formatId, isAudio)
+                    viewModel.downloadMedia(selection)
                 }
             }
         )

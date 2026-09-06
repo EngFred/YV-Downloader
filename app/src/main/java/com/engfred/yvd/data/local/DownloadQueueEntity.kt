@@ -12,6 +12,8 @@ data class DownloadQueueEntity(
     val thumbnailUrl: String,
     val formatId: String,
     val isAudio: Boolean,
+    val audioContainer: String?,
+    val bitrateKbps: Int?,
     val workManagerId: String?,
     val status: DownloadQueueStatus,
     val progress: Float,

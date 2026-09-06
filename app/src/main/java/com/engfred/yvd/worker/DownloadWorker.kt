@@ -15,6 +15,7 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.engfred.yvd.MainActivity
+import com.engfred.yvd.domain.model.AudioContainer
 import com.engfred.yvd.domain.model.DownloadQueueStatus
 import com.engfred.yvd.domain.model.DownloadStatus
 import com.engfred.yvd.domain.repository.DownloadQueueRepository
@@ -70,6 +71,10 @@ class DownloadWorker @AssistedInject constructor(
         val formatId    = inputData.getString("formatId")    ?: return Result.failure()
         val title       = inputData.getString("title") ?: "Media"
         val isAudio     = inputData.getBoolean("isAudio", false)
+        val container   = inputData.getString("audioContainer")?.let { AudioContainer.valueOf(it) }
+        val bitrateKbps = if (isAudio && container == AudioContainer.MP3) {
+            inputData.getInt("bitrateKbps", 0).takeIf { it > 0 }
+        } else null
 
         // Each item gets a stable notification ID derived from its queue ID so that
         // progress notifications update in-place rather than spawning new ones on retry.
@@ -101,7 +106,8 @@ class DownloadWorker @AssistedInject constructor(
 
             var resultFile: File? = null
 
-            repository.downloadVideo(url, formatId, title, isAudio).collectLatest { status ->
+            repository.downloadVideo(url, formatId, title, isAudio, container, bitrateKbps)
+                .collectLatest { status ->
                 when (status) {
                     is DownloadStatus.Progress -> {
                         queueRepository.updateProgress(

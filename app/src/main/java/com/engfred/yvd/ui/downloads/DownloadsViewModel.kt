@@ -81,11 +81,13 @@ class DownloadsViewModel @Inject constructor(
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setInputData(
                 workDataOf(
-                    "queueItemId" to item.id,
-                    "url"         to item.videoUrl,
-                    "formatId"    to item.formatId,
-                    "title"       to item.videoTitle,
-                    "isAudio"     to item.isAudio
+                    "queueItemId"    to item.id,
+                    "url"            to item.videoUrl,
+                    "formatId"       to item.formatId,
+                    "title"          to item.videoTitle,
+                    "isAudio"        to item.isAudio,
+                    "audioContainer" to item.audioContainer,
+                    "bitrateKbps"    to item.bitrateKbps
                 )
             )
             .addTag(TAG_DOWNLOAD_JOB)

@@ -18,3 +18,5 @@ local.properties
 
 # Signing keystore — NEVER commit
 *.jks
+# Crash dump debugging artifacts
+/tombstones/

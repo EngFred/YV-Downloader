@@ -26,12 +26,12 @@ class DownloadsRepository @Inject constructor() {
         return@withContext rawFiles
             .filter {
                 it.isFile &&
-                        (it.extension == "mp4" || it.extension == "m4a" || it.extension == "webm") &&
+                        (it.extension == "mp4" || it.extension == "m4a" || it.extension == "webm" || it.extension == "mp3") &&
                         !it.name.startsWith("temp_")
             }
             .map { file ->
                 val sizeMb = if (file.length() > 0) file.length() / (1024 * 1024) else 0
-                val isAudio = file.extension == "m4a"
+                val isAudio = file.extension == "m4a" || file.extension == "mp3"
 
                 DownloadItem(
                     file = file,

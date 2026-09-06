@@ -28,6 +28,9 @@ newpipeExtractor = "v0.26.5"
 okhttp = "5.3.2"
 desugar = "2.1.5"
 
+# MP3 encoding + audio tagging
+jaudiotagger = "2.2.3"
+
 [libraries]
 # Existing
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -61,6 +64,9 @@ coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
 newpipe-extractor = { module = "com.github.teamnewpipe:NewPipeExtractor", version.ref = "newpipeExtractor" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
+
+# Audio tagging
+jaudiotagger = { module = "com.github.AdrienPoupa:jaudiotagger", version.ref = "jaudiotagger" }
 
 # Coroutines
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }

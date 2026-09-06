@@ -19,14 +19,23 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.engfred.yvd.domain.model.AudioContainer
+import com.engfred.yvd.domain.model.FormatSelection
 import com.engfred.yvd.domain.model.VideoMetadata
 
+/**
+ * The single-video format picker.
+ *
+ * - Video tab: original MP4 streams.
+ * - Audio tab: original M4A (quality variants) plus three MP3 transcode options
+ *   (128/192/320 kbps).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FormatSelectionSheet(
     metadata: VideoMetadata,
     onDismiss: () -> Unit,
-    onFormatSelected: (formatId: String, isAudio: Boolean) -> Unit
+    onFormatSelected: (FormatSelection) -> Unit
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -84,7 +93,9 @@ fun FormatSelectionSheet(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(16.dp))
-                                .clickable { onFormatSelected(format.formatId, false) }
+                                .clickable {
+                                    onFormatSelected(FormatSelection(format.formatId, false))
+                                }
                         ) {
                             ListItem(
                                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
@@ -108,42 +119,89 @@ fun FormatSelectionSheet(
                     }
                 }
             } else {
-                // AUDIO LIST
+                // AUDIO LIST: original M4A quality variants + MP3 transcodes
                 LazyColumn(
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 48.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(metadata.audioFormats) { format ->
-                        Card(
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .clickable { onFormatSelected(format.formatId, true) }
-                        ) {
-                            ListItem(
-                                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                                headlineContent = { Text(format.bitrate, fontWeight = FontWeight.Bold) },
-                                supportingContent = { Text("${format.ext.uppercase()} • ${format.fileSize}") },
-                                leadingContent = {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f), RoundedCornerShape(10.dp)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(Icons.Rounded.Audiotrack, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(24.dp))
-                                    }
-                                },
-                                trailingContent = {
-                                    Icon(Icons.Rounded.Download, null, tint = MaterialTheme.colorScheme.primary)
-                                }
-                            )
-                        }
+                        AudioOptionCard(
+                            title = format.bitrate,
+                            subtitle = "${format.ext.uppercase()} • ${format.fileSize} • original quality",
+                            icon = Icons.Rounded.Audiotrack,
+                            onClick = {
+                                onFormatSelected(FormatSelection(format.formatId, true, AudioContainer.M4A))
+                            }
+                        )
+                    }
+
+                    item(key = "mp3-128") {
+                        AudioOptionCard(
+                            title = "MP3 128 kbps",
+                            subtitle = "Small file • universal compatibility",
+                            onClick = {
+                                onFormatSelected(FormatSelection("", true, AudioContainer.MP3, 128))
+                            }
+                        )
+                    }
+
+                    item(key = "mp3-192") {
+                        AudioOptionCard(
+                            title = "MP3 192 kbps",
+                            subtitle = "Recommended • best size-to-quality balance",
+                            onClick = {
+                                onFormatSelected(FormatSelection("", true, AudioContainer.MP3, 192))
+                            }
+                        )
+                    }
+
+                    item(key = "mp3-320") {
+                        AudioOptionCard(
+                            title = "MP3 320 kbps",
+                            subtitle = "Maximum quality • larger file",
+                            onClick = {
+                                onFormatSelected(FormatSelection("", true, AudioContainer.MP3, 320))
+                            }
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AudioOptionCard(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Rounded.Audiotrack
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+    ) {
+        ListItem(
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            headlineContent = { Text(title, fontWeight = FontWeight.Bold) },
+            supportingContent = { Text(subtitle) },
+            leadingContent = {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f), RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(24.dp))
+                }
+            },
+            trailingContent = {
+                Icon(Icons.Rounded.Download, null, tint = MaterialTheme.colorScheme.primary)
+            }
+        )
     }
 }

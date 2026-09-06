@@ -11,7 +11,9 @@ import com.engfred.yvd.TAG_DOWNLOAD_JOB
 import com.engfred.yvd.common.Resource
 import com.engfred.yvd.data.local.DownloadQueueEntity
 import com.engfred.yvd.domain.model.AppTheme
+import com.engfred.yvd.domain.model.AudioContainer
 import com.engfred.yvd.domain.model.DownloadQueueStatus
+import com.engfred.yvd.domain.model.FormatSelection
 import com.engfred.yvd.domain.model.PlaylistMetadata
 import com.engfred.yvd.domain.model.VideoMetadata
 import com.engfred.yvd.domain.repository.DownloadQueueRepository
@@ -165,7 +167,7 @@ class HomeViewModel @Inject constructor(
 
     // ─── Single Video Download ─────────────────────────────────────────────────
 
-    fun downloadMedia(formatId: String, isAudio: Boolean) {
+    fun downloadMedia(selection: FormatSelection) {
         val currentState = _state.value
         val url          = currentState.urlInput
         val title        = currentState.videoMetadata?.title ?: "video"
@@ -177,8 +179,10 @@ class HomeViewModel @Inject constructor(
             videoUrl       = url,
             videoTitle     = title,
             thumbnailUrl   = thumbnailUrl,
-            formatId       = formatId,
-            isAudio        = isAudio,
+            formatId       = selection.formatId,
+            isAudio        = selection.isAudio,
+            audioContainer = selection.container?.name,
+            bitrateKbps    = selection.bitrateKbps,
             workManagerId  = null,
             status         = DownloadQueueStatus.QUEUED,
             progress       = 0f,
@@ -191,7 +195,15 @@ class HomeViewModel @Inject constructor(
 
         viewModelScope.launch {
             queueRepository.enqueue(entity)
-            val workId = enqueueWorker(queueItemId, url, formatId, title, isAudio)
+            val workId = enqueueWorker(
+                queueItemId = queueItemId,
+                url         = url,
+                formatId    = selection.formatId,
+                title       = title,
+                isAudio     = selection.isAudio,
+                container   = selection.container,
+                bitrateKbps = selection.bitrateKbps
+            )
             queueRepository.updateStatusAndWorkId(
                 queueItemId, DownloadQueueStatus.QUEUED, workId, "Queued…"
             )
@@ -238,6 +250,8 @@ class HomeViewModel @Inject constructor(
                     thumbnailUrl   = video.thumbnailUrl,
                     formatId       = formatId,
                     isAudio        = isAudio,
+                    audioContainer = null,
+                    bitrateKbps    = null,
                     workManagerId  = null,
                     status         = DownloadQueueStatus.QUEUED,
                     progress       = 0f,
@@ -263,7 +277,9 @@ class HomeViewModel @Inject constructor(
                         url         = entity.videoUrl,
                         formatId    = entity.formatId,
                         title       = entity.videoTitle,
-                        isAudio     = entity.isAudio
+                        isAudio     = entity.isAudio,
+                        container   = null,
+                        bitrateKbps = null
                     )
                     // Update each item's workManagerId so the pause/cancel actions
                     // can target the correct WorkManager job by UUID.
@@ -298,7 +314,9 @@ class HomeViewModel @Inject constructor(
         url: String,
         formatId: String,
         title: String,
-        isAudio: Boolean
+        isAudio: Boolean,
+        container: AudioContainer?,
+        bitrateKbps: Int?
     ): String {
         val request = OneTimeWorkRequestBuilder<DownloadWorker>()
             .setConstraints(
@@ -308,11 +326,13 @@ class HomeViewModel @Inject constructor(
             )
             .setInputData(
                 workDataOf(
-                    "queueItemId" to queueItemId,
-                    "url"         to url,
-                    "formatId"    to formatId,
-                    "title"       to title,
-                    "isAudio"     to isAudio
+                    "queueItemId"    to queueItemId,
+                    "url"            to url,
+                    "formatId"       to formatId,
+                    "title"          to title,
+                    "isAudio"        to isAudio,
+                    "audioContainer" to container?.name,
+                    "bitrateKbps"    to bitrateKbps
                 )
             )
             .addTag(TAG_DOWNLOAD_JOB)

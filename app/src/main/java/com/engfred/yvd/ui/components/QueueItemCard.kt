@@ -84,8 +84,16 @@ fun QueueItemCard(
                         .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
                         .padding(horizontal = 3.dp, vertical = 1.dp)
                 ) {
+                    val badgeText = if (item.isAudio) {
+                        when (item.audioContainer) {
+                            "MP3" -> if (item.bitrateKbps != null) "MP3 ${item.bitrateKbps}" else "MP3"
+                            else -> "M4A"
+                        }
+                    } else {
+                        "MP4"
+                    }
                     Text(
-                        text = if (item.isAudio) "M4A" else "MP4",
+                        text = badgeText,
                         color = Color.White,
                         fontSize = 8.sp,
                         fontWeight = FontWeight.Bold
