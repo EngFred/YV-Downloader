@@ -8,6 +8,8 @@ import android.util.Log
 import jaygoo.library.converter.Mp3Converter
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /**
  * Transcodes an M4A/AAC file to MP3 entirely on-device:
@@ -97,6 +99,17 @@ class Mp3Transcoder {
 
             out = FileOutputStream(outputPath)
 
+            // Persistent, allocation-free hot-path buffers:
+            //  - pcmDirect: direct ByteBuffer whose storage is pinned and read natively
+            //    by LAME with zero element copies (see Mp3Converter.encodeInterleaved).
+            //  - mp3Buf: single reused output buffer instead of one allocation per chunk.
+            val pcmDirect = ByteBuffer
+                .allocateDirect(MAX_PCM_FRAMES * MAX_PCM_CHANNELS * 2)
+                .order(ByteOrder.LITTLE_ENDIAN)
+            val mp3Buf = ByteArray((1.25 * MAX_PCM_FRAMES + 7200).toInt())
+
+            val loopStartNs = System.nanoTime()
+
             while (!outputDone) {
                 if (!inputDone) {
                     val inputIndex = decoder.dequeueInputBuffer(10_000)
@@ -130,11 +143,18 @@ class Mp3Transcoder {
                             pcmBuf.limit(info.offset + info.size)
 
                             val samplesPerChannel = info.size / (2 * channels)
-                            val shorts = toShorts(pcmBuf, samplesPerChannel * channels, pcmEncoding)
+                            if (samplesPerChannel > MAX_PCM_FRAMES) {
+                                throw InvalidAudioException(
+                                    "Decoder output larger than expected ($samplesPerChannel frames)"
+                                )
+                            }
 
-                            // mp3buf must be at least "7200 + 1.25 * samples" bytes.
-                            val mp3Buf = ByteArray((1.25 * samplesPerChannel + 7200).toInt())
-                            val encoded = encodeChunk(shorts, samplesPerChannel, channels, mp3Buf)
+                            pcmDirect.clear()
+                            copyPcmInto(pcmDirect, pcmBuf, samplesPerChannel * channels, pcmEncoding)
+
+                            val encoded = Mp3Converter.encodeInterleaved(
+                                pcmDirect, samplesPerChannel, channels, mp3Buf
+                            )
                             if (encoded < 0) {
                                 throw InvalidAudioException("MP3 encoder error (code=$encoded)")
                             }
@@ -158,6 +178,14 @@ class Mp3Transcoder {
                     }
                 }
             }
+
+            val elapsed = (System.nanoTime() - loopStartNs) / 1_000_000_000.0
+            val rt = encodedSamples.toDouble() / sampleRate / elapsed
+            Log.i(
+                TAG,
+                "decode+encode %s: %.2fs for %d samples (%.1fx realtime, %.0f kHz)"
+                    .format(outputPath.substringAfterLast('/'), elapsed, encodedSamples, rt, sampleRate / 1000.0)
+            )
 
             // ── Flush LAME's internal PCM/MP3 buffers ──────────────────────────
             // Do NOT call Mp3Converter.close() here — the finally block closes the
@@ -192,38 +220,19 @@ class Mp3Transcoder {
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
-    private fun encodeChunk(
-        pcmShorts: ShortArray,
-        samples: Int,
-        channels: Int,
-        mp3Buf: ByteArray
-    ): Int {
-        if (channels == 2) {
-            val left = ShortArray(samples)
-            val right = ShortArray(samples)
-            for (i in 0 until samples) {
-                left[i] = pcmShorts[i * 2]
-                right[i] = pcmShorts[i * 2 + 1]
-            }
-            return Mp3Converter.encode(left, right, samples, mp3Buf)
-        }
-        // Mono: LAME ignores the right channel — pass the same buffer for both.
-        return Mp3Converter.encode(pcmShorts, pcmShorts, samples, mp3Buf)
-    }
-
-    private fun toShorts(buffer: java.nio.ByteBuffer, count: Int, encoding: Int): ShortArray {
-        val shorts = ShortArray(count)
+    /** Copies decoder PCM into [dst] (a direct buffer read by native LAME). */
+    private fun copyPcmInto(dst: java.nio.ByteBuffer, src: java.nio.ByteBuffer, count: Int, encoding: Int) {
         if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
             val floats = FloatArray(count)
-            buffer.asFloatBuffer().get(floats)
-            for (i in floats.indices) {
-                val clamped = floats[i].coerceIn(-1f, 1f)
-                shorts[i] = (clamped * Short.MAX_VALUE).toInt().toShort()
+            src.asFloatBuffer().get(floats)
+            val shorts = dst.asShortBuffer()
+            for (f in floats) {
+                val clamped = f.coerceIn(-1f, 1f)
+                shorts.put((clamped * Short.MAX_VALUE).toInt().toShort())
             }
         } else {
-            buffer.asShortBuffer().get(shorts)
+            dst.put(src)
         }
-        return shorts
     }
 
     private fun findAudioTrack(extractor: MediaExtractor): Int? {
@@ -242,5 +251,10 @@ class Mp3Transcoder {
         // LAME mode 0 = CBR; quality 5 = good quality, fast.
         private const val MODE_CBR = 0
         private const val QUALITY_GOOD = 5
+
+        // Tuned above real-world AAC AU sizes (~1024–2048 frames) so a single
+        // decoder output always fits the persistent buffers without re-allocating.
+        private const val MAX_PCM_FRAMES = 4096
+        private const val MAX_PCM_CHANNELS = 2
     }
 }

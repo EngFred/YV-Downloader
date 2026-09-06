@@ -57,16 +57,21 @@ object FilenameParser {
 
     /**
      * Builds the final audio filename (no extension): `"Artist - Song"`.
+     *
+     * When [label] is provided (e.g. `"192kbps"`) it is appended as
+     * `"Artist - Song (192kbps)"` so different MP3 bitrates / M4A quality
+     * variants of the same track never overwrite each other.
      */
-    fun buildAudioBaseName(track: TrackName): String {
+    fun buildAudioBaseName(track: TrackName, label: String? = null): String {
         val artist = track.artist.trim()
         val song = track.song.trim()
-        return when {
+        val base = when {
             artist.isNotEmpty() && song.isNotEmpty() && artist != song ->
                 sanitize("$artist - $song")
             else ->
                 sanitize(song.ifBlank { artist.ifBlank { "audio" } })
         }
+        return if (label.isNullOrBlank()) base else sanitize("$base ($label)")
     }
 
     /**

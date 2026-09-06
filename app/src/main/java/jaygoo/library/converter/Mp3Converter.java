@@ -69,6 +69,32 @@ public class Mp3Converter {
         int samples, byte[] mp3buf);
 
     /**
+     * Zero-copy streaming encode from a <em>direct</em> ByteBuffer.
+     *
+     * Native code reads the PCM straight from the pinned direct buffer (no element
+     * copies, no interleaved left/right split arrays), which makes conversion run
+     * at near-FFmpeg speed.
+     *
+     * @param pcm
+     *            direct ByteBuffer holding raw little-endian 16-bit PCM. For stereo
+     *            buffers the samples must be interleaved (L R L R ...).
+     * @param samples
+     *            number of samples per channel (half of the total shorts for stereo).
+     * @param channels
+     *            1 (mono) or 2 (stereo).
+     * @param mp3buf
+     *            result encoded MP3 stream. You must specified
+     *            "7200 + (1.25 * samples)" length array.
+     * @return <p>number of bytes output in mp3buf. Can be 0.</p>
+     *         <p>-1: mp3buf was too small</p>
+     *         <p>-2: buffer pinning problem</p>
+     *         <p>-3: lame_init_params() not called</p>
+     *         -4: psycho acoustic problems
+     */
+    public native static int encodeInterleaved(java.nio.ByteBuffer pcm,
+        int samples, int channels, byte[] mp3buf);
+
+    /**
      * Flush LAME buffer.
      *
      * REQUIRED:

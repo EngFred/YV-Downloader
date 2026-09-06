@@ -22,6 +22,7 @@ import com.engfred.yvd.domain.repository.YoutubeRepository
 import com.engfred.yvd.util.AudioTagWriter
 import com.engfred.yvd.util.FilenameParser
 import com.engfred.yvd.util.Mp3Transcoder
+import com.engfred.yvd.util.Mp4TagsWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -329,7 +330,10 @@ class YoutubeRepositoryImpl @Inject constructor(
                 ?: throw Exception("Audio stream not found (formatId=$formatId)")
         }
 
-        val baseName = FilenameParser.buildAudioBaseName(track)
+        // The bitrate label keeps different MP3 bitrates and M4A quality variants
+        // of the same track in separate files instead of overwriting each other.
+        val label = if (isMp3) "${(bitrateKbps ?: DEFAULT_MP3_BITRATE)}kbps" else "${stream.averageBitrate}kbps"
+        val baseName = FilenameParser.buildAudioBaseName(track, label)
         val finalFile = File(appDir, "$baseName.${container.extension}")
 
         // M4A is resumable via ResumeStateStore; an already-complete file can be skipped.
@@ -343,6 +347,13 @@ class YoutubeRepositoryImpl @Inject constructor(
         if (!isMp3) {
             trySend(DownloadStatus.Progress(0f, "Downloading audio…"))
             downloadStreamParallel(stream.content, finalFile, this, "Downloading audio…")
+
+            // YouTube's audio streams are fragmented MP4 (moof/mdat). jaudiotagger
+            // cannot parse or edit those, so re-mux them into a standard M4A first —
+            // this is a lossless container rewrite (no re-encode) that makes the file
+            // both universally playable AND taggable (title/artist/album art).
+            remuxM4aToStandard(finalFile, "Finalizing audio…")
+
             applyAudioTags(finalFile, track, bestThumbnailUrl(extractor))
             trySend(DownloadStatus.Success(finalFile))
             return
@@ -396,10 +407,16 @@ class YoutubeRepositoryImpl @Inject constructor(
         val artworkBytes = withContext(Dispatchers.IO) {
             runCatching { fetchArtwork(thumbnailUrl) }.getOrNull()
         }
-        val jpeg = artworkBytes?.let { AudioTagWriter.prepareArtwork(it) }
+        val artwork = artworkBytes?.let { AudioTagWriter.prepareArtwork(it) }
 
         runCatching {
-            AudioTagWriter.embed(file, track.artist, track.song, jpeg)
+            if (file.extension.equals("m4a", ignoreCase = true)) {
+                // jaudiotagger can't parse MediaMuxer's output, so M4A tags are
+                // written by our minimal iTunes-ilst writer instead.
+                Mp4TagsWriter.writeTags(file.absolutePath, track.song, track.artist, artwork)
+            } else {
+                AudioTagWriter.embed(file, track.artist, track.song, artwork)
+            }
         }.onFailure {
             Log.w(TAG, "Tagging/artwork skipped for ${file.name}: ${it.message}")
         }
@@ -787,6 +804,82 @@ class YoutubeRepositoryImpl @Inject constructor(
     }
 
     // ─── Muxing ───────────────────────────────────────────────────────────────
+
+    /**
+     * Rewrites a fragmented MP4 audio stream (the `moof`/`mdat` layout that YouTube
+     * serves) into a standard, non-fragmented M4A in place.
+     *
+     * This is a **lossless container rewrite** — the AAC samples are copied byte-for-byte,
+     * never re-encoded. It is required because jaudiotagger (used for title/artist/album-art
+     * tagging) can neither parse nor edit fragmented MP4 files.
+     *
+     * Only AAC sources are remuxed; anything else is left untouched so playback always works.
+     */
+    private suspend fun ProducerScope<DownloadStatus>.remuxM4aToStandard(
+        input: File,
+        statusPrefix: String
+    ) {
+        if (!input.exists() || input.length() == 0L) return
+
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(input.absolutePath)
+            val trackIndex = findTrackIndex(extractor, "audio/")
+            val mime = extractor.getTrackFormat(trackIndex).getString(MediaFormat.KEY_MIME) ?: return
+            val isAac = mime.equals(MediaFormat.MIMETYPE_AUDIO_AAC, ignoreCase = true) ||
+                    mime.equals("audio/mp4a-latm", ignoreCase = true)
+
+            if (!isAac) {
+                Log.d(TAG, "Skipping M4A remux (codec $mime is not AAC); keeping original file")
+                return
+            }
+
+            val temp = File(input.parentFile, "remux_${System.currentTimeMillis()}.m4a")
+            try {
+                trySend(DownloadStatus.Progress(0f, statusPrefix))
+                val muxer = MediaMuxer(temp.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                try {
+                    extractor.selectTrack(trackIndex)
+                    val muxTrack = muxer.addTrack(extractor.getTrackFormat(trackIndex))
+                    muxer.start()
+
+                    val buffer = ByteBuffer.allocate(MUX_BUFFER_SIZE)
+                    val info = MediaCodec.BufferInfo()
+                    var lastTsUs = -1L
+                    while (true) {
+                        val size = extractor.readSampleData(buffer, 0)
+                        if (size <= 0) break
+                        // MediaMuxer requires strictly non-decreasing timestamps; fragmented
+                        // dash streams can have tiny backward jumps at segment boundaries.
+                        val ts = extractor.sampleTime
+                        info.presentationTimeUs = if (ts > lastTsUs) ts else lastTsUs + 1
+                        lastTsUs = info.presentationTimeUs
+                        info.flags = extractor.sampleFlags
+                        info.size = size
+                        muxer.writeSampleData(muxTrack, buffer, info)
+                        extractor.advance()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "M4A remux write failed: ${e.message}")
+                    throw e
+                } finally {
+                    try { muxer.stop() } catch (_: Exception) {}
+                    try { muxer.release() } catch (_: Exception) {}
+                }
+
+                if (temp.length() > 0L) {
+                    input.delete()
+                    temp.renameTo(input)
+                }
+            } finally {
+                temp.delete()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "M4A remux skipped (${e.message}); keeping original file")
+        } finally {
+            try { extractor.release() } catch (_: Exception) {}
+        }
+    }
 
     private fun muxAudioVideo(audioPath: String, videoPath: String, outPath: String, format: Int) {
         val videoExtractor = MediaExtractor()

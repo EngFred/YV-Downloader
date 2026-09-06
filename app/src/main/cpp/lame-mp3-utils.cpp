@@ -97,6 +97,33 @@ Java_jaygoo_library_converter_Mp3Converter_encode(
     return result;
 }
 
+// Zero-copy streaming encode: [directPcm] is a direct ByteBuffer holding raw
+// little-endian 16-bit PCM (interleaved when stereo). Native access is direct
+// (no element copies), so transcode runs at near-FFmpeg speed.
+extern "C" JNIEXPORT jint JNICALL
+Java_jaygoo_library_converter_Mp3Converter_encodeInterleaved(
+        JNIEnv *env, jclass, jobject directPcm, jint frames, jint channels, jbyteArray mp3buf) {
+    if (sLame == NULL) return -3;  // lame_init_params() not called
+
+    void *pcm = env->GetDirectBufferAddress(directPcm);
+    if (pcm == NULL) return -2;
+
+    const jsize size = env->GetArrayLength(mp3buf);
+    jbyte *out = env->GetByteArrayElements(mp3buf, NULL);
+    if (out == NULL) return -2;
+
+    int result;
+    if (channels == 2) {
+        result = lame_encode_buffer_interleaved(
+                sLame, (short *) pcm, frames, (unsigned char *) out, (int) size);
+    } else {
+        result = lame_encode_buffer(
+                sLame, (short *) pcm, (short *) pcm, frames, (unsigned char *) out, (int) size);
+    }
+    env->ReleaseByteArrayElements(mp3buf, (jbyte *) out, 0);
+    return result;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_jaygoo_library_converter_Mp3Converter_flush(JNIEnv *env, jclass, jbyteArray mp3buf) {
     if (sLame == NULL) return -3;
