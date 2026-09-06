@@ -109,6 +109,11 @@ dependencies {
     // MP3 encoding (LAME) + audio tagging
     implementation(libs.jaudiotagger)
 
+    // FFmpeg MP3 conversion (libmp3lame) — arm64/x86_64 only; 32-bit devices
+    // fall back to the LAME JNI transcoder automatically.
+    implementation(libs.ffmpegkit.audio)
+    implementation(libs.arthenica.smart.exception)
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 

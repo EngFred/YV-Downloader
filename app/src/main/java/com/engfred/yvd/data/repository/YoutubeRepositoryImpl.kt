@@ -21,6 +21,7 @@ import com.engfred.yvd.domain.model.VideoMetadata
 import com.engfred.yvd.domain.repository.YoutubeRepository
 import com.engfred.yvd.util.AudioTagWriter
 import com.engfred.yvd.util.FilenameParser
+import com.engfred.yvd.util.FfmpegMp3Transcoder
 import com.engfred.yvd.util.Mp3Transcoder
 import com.engfred.yvd.util.Mp4TagsWriter
 import kotlinx.coroutines.Dispatchers
@@ -368,14 +369,30 @@ class YoutubeRepositoryImpl @Inject constructor(
 
             val targetBitrate = bitrateKbps ?: DEFAULT_MP3_BITRATE
             trySend(DownloadStatus.Progress(0f, "Converting to MP3 ($targetBitrate kbps)…"))
-            val converted = Mp3Transcoder().transcode(
-                inputPath = m4aTemp.absolutePath,
-                outputPath = finalFile.absolutePath,
-                bitrateKbps = targetBitrate,
-                progress = { pct ->
-                    trySend(DownloadStatus.Progress(pct.coerceIn(0f, 99f), "Converting to MP3… ${pct.toInt()}%"))
-                }
-            )
+            // Prefer FFmpeg (libmp3lame) when present — near-realtime native
+            // conversion. 32-bit devices without ffmpeg-kit fall back to the
+            // MediaCodec → LAME path.
+            val converted = if (FfmpegMp3Transcoder.isAvailable()) {
+                Log.i(TAG, "MP3 via FFmpeg (libmp3lame)")
+                FfmpegMp3Transcoder.transcode(
+                    inputPath = m4aTemp.absolutePath,
+                    outputPath = finalFile.absolutePath,
+                    bitrateKbps = targetBitrate,
+                    progress = { pct ->
+                        trySend(DownloadStatus.Progress(pct.coerceIn(0f, 99f), "Converting to MP3… ${pct.toInt()}%"))
+                    }
+                )
+            } else {
+                Log.i(TAG, "MP3 via LAME (ffmpeg-kit unavailable)")
+                Mp3Transcoder().transcode(
+                    inputPath = m4aTemp.absolutePath,
+                    outputPath = finalFile.absolutePath,
+                    bitrateKbps = targetBitrate,
+                    progress = { pct ->
+                        trySend(DownloadStatus.Progress(pct.coerceIn(0f, 99f), "Converting to MP3… ${pct.toInt()}%"))
+                    }
+                )
+            }
             if (!converted) {
                 throw Exception("MP3 conversion failed — unsupported audio format")
             }

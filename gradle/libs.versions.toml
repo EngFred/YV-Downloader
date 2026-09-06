@@ -31,6 +31,10 @@ desugar = "2.1.5"
 # MP3 encoding + audio tagging
 jaudiotagger = "2.2.3"
 
+# FFmpeg (libmp3lame) — maintained FFmpegKit continuation on Maven Central
+ffmpegKit = "8.1.7"
+smartException = "0.2.1"
+
 [libraries]
 # Existing
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -67,6 +71,12 @@ desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref 
 
 # Audio tagging
 jaudiotagger = { module = "com.github.AdrienPoupa:jaudiotagger", version.ref = "jaudiotagger" }
+
+# FFmpeg (libmp3lame audio build; maintained FFmpegKit continuation)
+ffmpegkit-audio = { group = "dev.ffmpegkit-maintained", name = "ffmpeg-kit-audio", version.ref = "ffmpegKit" }
+
+# Runtime class referenced by ffmpeg-kit (missing from the AAR's POM)
+arthenica-smart-exception = { group = "com.arthenica", name = "smart-exception-java", version.ref = "smartException" }
 
 # Coroutines
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }

@@ -69,6 +69,11 @@
 -keep class org.jaudiotagger.** { *; }
 -dontwarn org.jaudiotagger.**
 
+# ─── FFmpegKit (MP3 conversion via libmp3lame) ─────────────────────────────────
+-keep class com.arthenica.ffmpegkit.** { *; }
+-dontwarn com.arthenica.ffmpegkit.**
+-dontwarn org.brotli.
+
 # ─── Kotlin Serialization (if used anywhere) ──────────────────────────────────
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.AnnotationsKt
