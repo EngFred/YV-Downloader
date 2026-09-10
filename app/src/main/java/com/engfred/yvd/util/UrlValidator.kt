@@ -13,6 +13,8 @@ package com.engfred.yvd.util
  * - Mobile watch:     m.youtube.com/watch?v=xxxxxxxxxxx
  * - Shortened:        youtu.be/xxxxxxxxxxx
  * - Shorts:           youtube.com/shorts/xxxxxxxxxxx
+ *
+ * Also classifies free-text input as a URL, playlist, or search query.
  */
 object UrlValidator {
 
@@ -25,6 +27,9 @@ object UrlValidator {
     private val PLAYLIST_PATTERN =
         Regex("^(https?://)?(www\\.|m\\.)?youtube\\.com/playlist\\?.*list=[\\w\\-]+.*$")
 
+    /** How the input field text should be handled. */
+    enum class InputType { URL, PLAYLIST, SEARCH_QUERY }
+
     fun isValidYouTubeUrl(url: String): Boolean {
         val t = url.trim()
         return t.isNotBlank() && (YOUTUBE_PATTERNS.any { it.matches(t) } || PLAYLIST_PATTERN.matches(t))
@@ -34,6 +39,18 @@ object UrlValidator {
     fun isPlaylistUrl(url: String): Boolean {
         val t = url.trim()
         return PLAYLIST_PATTERN.matches(t) && YOUTUBE_PATTERNS.none { it.matches(t) }
+    }
+
+    /**
+     * Determines whether the user typed a YouTube URL, a playlist URL, or a
+     * free-text search query.
+     */
+    fun classifyInput(input: String): InputType {
+        val t = input.trim()
+        if (t.isBlank()) return InputType.SEARCH_QUERY
+        if (isPlaylistUrl(t)) return InputType.PLAYLIST
+        if (YOUTUBE_PATTERNS.any { it.matches(t) }) return InputType.URL
+        return InputType.SEARCH_QUERY
     }
 
     fun sanitize(url: String): String {

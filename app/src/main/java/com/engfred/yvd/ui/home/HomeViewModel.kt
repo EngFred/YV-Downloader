@@ -15,6 +15,7 @@ import com.engfred.yvd.domain.model.AudioContainer
 import com.engfred.yvd.domain.model.DownloadQueueStatus
 import com.engfred.yvd.domain.model.FormatSelection
 import com.engfred.yvd.domain.model.PlaylistMetadata
+import com.engfred.yvd.domain.model.SearchResult
 import com.engfred.yvd.domain.model.VideoMetadata
 import com.engfred.yvd.domain.repository.DownloadQueueRepository
 import com.engfred.yvd.domain.repository.ThemeRepository
@@ -23,6 +24,8 @@ import com.engfred.yvd.util.UrlValidator
 import com.engfred.yvd.worker.DownloadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,6 +48,13 @@ data class HomeState(
     // Playlist
     val isPlaylistUrl: Boolean = false,
     val playlistMetadata: PlaylistMetadata? = null,
+    // Search
+    val searchResults: List<SearchResult> = emptyList(),
+    val searchSuggestions: List<String> = emptyList(),
+    val isSearching: Boolean = false,
+    val searchError: String? = null,
+    val searchNextPage: Any? = null,
+    val isLoadingMore: Boolean = false,
     // Global state
     val error: String? = null,
     val activeDownloadCount: Int = 0,
@@ -68,6 +78,9 @@ class HomeViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(HomeState())
     val state = _state.asStateFlow()
+
+    private var searchJob: Job? = null
+    private var suggestionJob: Job? = null
 
     val currentTheme = themeRepository.theme.stateIn(
         scope = viewModelScope,
@@ -104,25 +117,51 @@ class HomeViewModel @Inject constructor(
                 videoMetadata = if (newUrl.isBlank()) null else it.videoMetadata,
                 playlistMetadata = if (newUrl.isBlank()) null else it.playlistMetadata,
                 isPlaylistUrl = false,
-                error = null
+                error = null,
+                // Clear search results when input changes
+                searchResults = emptyList(),
+                searchSuggestions = emptyList(),
+                searchNextPage = null,
+                searchError = null
             )
+        }
+        // Fetch suggestions for non-URL input
+        if (newUrl.isNotBlank() && UrlValidator.classifyInput(newUrl) == UrlValidator.InputType.SEARCH_QUERY) {
+            fetchSearchSuggestions(newUrl)
         }
     }
 
     // ─── Metadata Loading ──────────────────────────────────────────────────────
 
     fun loadVideoInfo(url: String) {
-        val sanitized = UrlValidator.sanitize(url)
-        if (sanitized != _state.value.urlInput) {
-            _state.update { it.copy(urlInput = sanitized) }
-        }
+        // Cancel any pending suggestion requests
+        suggestionJob?.cancel()
 
-        if (UrlValidator.isPlaylistUrl(sanitized)) {
-            loadPlaylistInfo(sanitized)
-            return
-        }
+        val inputType = UrlValidator.classifyInput(url)
 
-        if (!UrlValidator.isValidYouTubeUrl(sanitized)) {
+        when (inputType) {
+            UrlValidator.InputType.PLAYLIST -> {
+                val sanitized = UrlValidator.sanitize(url)
+                if (sanitized != _state.value.urlInput) {
+                    _state.update { it.copy(urlInput = sanitized) }
+                }
+                loadPlaylistInfo(sanitized)
+            }
+            UrlValidator.InputType.URL -> {
+                val sanitized = UrlValidator.sanitize(url)
+                if (sanitized != _state.value.urlInput) {
+                    _state.update { it.copy(urlInput = sanitized) }
+                }
+                loadSingleVideoInfo(sanitized)
+            }
+            UrlValidator.InputType.SEARCH_QUERY -> {
+                performSearch(url.trim())
+            }
+        }
+    }
+
+    private fun loadSingleVideoInfo(url: String) {
+        if (!UrlValidator.isValidYouTubeUrl(url)) {
             _state.update {
                 it.copy(urlError = "Please paste a valid YouTube link (youtube.com or youtu.be)")
             }
@@ -132,11 +171,12 @@ class HomeViewModel @Inject constructor(
         _state.update {
             it.copy(
                 isLoading = true, urlError = null, error = null,
-                videoMetadata = null, playlistMetadata = null, isPlaylistUrl = false
+                videoMetadata = null, playlistMetadata = null, isPlaylistUrl = false,
+                searchResults = emptyList(), searchSuggestions = emptyList()
             )
         }
 
-        repository.getVideoMetadata(sanitized)
+        repository.getVideoMetadata(url)
             .onEach { result ->
                 when (result) {
                     is Resource.Loading -> _state.update { it.copy(isLoading = true) }
@@ -342,6 +382,115 @@ class HomeViewModel @Inject constructor(
         return request.id.toString()
     }
 
+    // ─── YouTube Search ────────────────────────────────────────────────────────
+
+    private fun performSearch(query: String) {
+        searchJob?.cancel()
+        suggestionJob?.cancel()
+
+        _state.update {
+            it.copy(
+                isLoading = true,
+                searchError = null,
+                videoMetadata = null,
+                playlistMetadata = null,
+                isPlaylistUrl = false,
+                searchSuggestions = emptyList()
+            )
+        }
+
+        searchJob = repository.search(query)
+            .onEach { result ->
+                when (result) {
+                    is Resource.Loading -> _state.update { it.copy(isSearching = true) }
+                    is Resource.Success -> _state.update {
+                        it.copy(
+                            isLoading = false,
+                            isSearching = false,
+                            searchResults = result.data ?: emptyList(),
+                            searchError = null
+                        )
+                    }
+                    is Resource.Error -> _state.update {
+                        it.copy(
+                            isLoading = false,
+                            isSearching = false,
+                            searchError = result.message
+                        )
+                    }
+                }
+            }
+            .launchIn(viewModelScope)
+    }
+
+    private fun fetchSearchSuggestions(query: String) {
+        suggestionJob?.cancel()
+        suggestionJob = viewModelScope.launch {
+            delay(300) // debounce
+            repository.getSearchSuggestions(query)
+                .onEach { result ->
+                    if (result is Resource.Success) {
+                        _state.update { it.copy(searchSuggestions = result.data ?: emptyList()) }
+                    }
+                }
+                .launchIn(this)
+        }
+    }
+
+    fun loadMoreSearchResults() {
+        val currentState = _state.value
+        if (currentState.isLoadingMore || currentState.searchNextPage == null) return
+        val query = currentState.urlInput.trim()
+
+        _state.update { it.copy(isLoadingMore = true) }
+
+        repository.searchNextPage(query, currentState.searchNextPage)
+            .onEach { result ->
+                when (result) {
+                    is Resource.Loading -> _state.update { it.copy(isLoadingMore = true) }
+                    is Resource.Success -> {
+                        val (newItems, nextPage) = result.data ?: Pair(emptyList(), null)
+                        _state.update {
+                            it.copy(
+                                isLoadingMore = false,
+                                searchResults = it.searchResults + newItems,
+                                searchNextPage = nextPage
+                            )
+                        }
+                    }
+                    is Resource.Error -> _state.update {
+                        it.copy(isLoadingMore = false, searchError = result.message)
+                    }
+                }
+            }
+            .launchIn(viewModelScope)
+    }
+
+    fun onSearchResultClicked(result: SearchResult) {
+        // Clear search state and load the selected video's full metadata
+        _state.update {
+            it.copy(
+                urlInput = result.url,
+                searchResults = emptyList(),
+                searchSuggestions = emptyList(),
+                searchNextPage = null,
+                searchError = null
+            )
+        }
+        loadSingleVideoInfo(result.url)
+    }
+
+    fun clearSearchResults() {
+        _state.update {
+            it.copy(
+                searchResults = emptyList(),
+                searchSuggestions = emptyList(),
+                searchNextPage = null,
+                searchError = null
+            )
+        }
+    }
+
     // ─── Incoming URL Guard ───────────────────────────────────────────────────
 
     fun handleIncomingUrl(url: String) {
@@ -370,7 +519,10 @@ class HomeViewModel @Inject constructor(
                 videoMetadata = null,
                 playlistMetadata = null,
                 isPlaylistUrl = false,
-                error         = null
+                error         = null,
+                searchResults = emptyList(),
+                searchSuggestions = emptyList(),
+                searchNextPage = null
             )
         }
         loadVideoInfo(url)

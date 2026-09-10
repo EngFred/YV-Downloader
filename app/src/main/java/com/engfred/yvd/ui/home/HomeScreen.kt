@@ -9,6 +9,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -133,143 +136,250 @@ fun HomeScreen(
             },
             containerColor = MaterialTheme.colorScheme.background
         ) { innerPadding ->
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Card(
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(8.dp, RoundedCornerShape(16.dp), spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    TextField(
-                        value = state.urlInput,
-                        onValueChange = { viewModel.onUrlInputChanged(it) },
-                        placeholder = { Text("Paste YouTube link here...", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent
-                        ),
-                        trailingIcon = {
-                            Row {
-                                if (state.urlInput.isNotBlank()) {
-                                    IconButton(onClick = { viewModel.onUrlInputChanged("") }) {
-                                        Icon(Icons.Rounded.Clear, contentDescription = "Clear")
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // ─── Search / URL Input Card ──────────────────────────────
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .shadow(8.dp, RoundedCornerShape(16.dp), spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        TextField(
+                            value = state.urlInput,
+                            onValueChange = { viewModel.onUrlInputChanged(it) },
+                            placeholder = { Text("Paste a link or search YouTube...", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent
+                            ),
+                            trailingIcon = {
+                                Row {
+                                    if (state.urlInput.isNotBlank()) {
+                                        IconButton(onClick = { viewModel.onUrlInputChanged("") }) {
+                                            Icon(Icons.Rounded.Clear, contentDescription = "Clear")
+                                        }
+                                    }
+                                    IconButton(onClick = {
+                                        val clip = clipboardManager.getText()?.text
+                                        if (!clip.isNullOrBlank()) {
+                                            keyboardController?.hide()
+                                            viewModel.loadVideoInfo(clip)
+                                        }
+                                    }) {
+                                        Icon(Icons.Rounded.ContentPaste, contentDescription = "Paste", tint = MaterialTheme.colorScheme.primary)
                                     }
                                 }
-                                IconButton(onClick = {
-                                    val clip = clipboardManager.getText()?.text
-                                    if (!clip.isNullOrBlank()) {
-                                        keyboardController?.hide()
-                                        viewModel.loadVideoInfo(clip)
+                            }
+                        )
+                    }
+
+                    // ─── Search Suggestions Dropdown ──────────────────────────
+                    if (state.searchSuggestions.isNotEmpty() && state.searchResults.isEmpty() && state.videoMetadata == null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        SearchSuggestions(
+                            suggestions = state.searchSuggestions,
+                            onSuggestionClick = { suggestion ->
+                                keyboardController?.hide()
+                                viewModel.onUrlInputChanged(suggestion)
+                                viewModel.loadVideoInfo(suggestion)
+                            },
+                            onRecentClick = { suggestion ->
+                                keyboardController?.hide()
+                                viewModel.onUrlInputChanged(suggestion)
+                                viewModel.loadVideoInfo(suggestion)
+                            }
+                        )
+                    }
+
+                    AnimatedVisibility(visible = state.urlError != null) {
+                        Text(
+                            text = state.urlError ?: "",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 8.dp, start = 8.dp).fillMaxWidth()
+                        )
+                    }
+
+                    // ─── Action Button (visible when no metadata/search results) ──
+                    AnimatedVisibility(
+                        visible = state.videoMetadata == null && state.playlistMetadata == null && state.searchResults.isEmpty()
+                    ) {
+                        Column(modifier = Modifier.padding(top = 16.dp)) {
+                            Button(
+                                onClick = {
+                                    keyboardController?.hide()
+                                    viewModel.loadVideoInfo(state.urlInput)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                shape = RoundedCornerShape(16.dp),
+                                elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp, pressedElevation = 2.dp),
+                                enabled = !state.isLoading && state.urlInput.isNotBlank()
+                            ) {
+                                if (state.isLoading) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text("Fetching...", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                } else {
+                                    Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Search YouTube", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+
+                            // Empty state illustration
+                            AnimatedVisibility(
+                                visible = !state.isLoading,
+                                enter = fadeIn(), exit = fadeOut()
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 48.dp)
+                                        .clip(RoundedCornerShape(24.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                        .padding(32.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(72.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Rounded.RocketLaunch, contentDescription = null, modifier = Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
                                     }
-                                }) {
-                                    Icon(Icons.Rounded.ContentPaste, contentDescription = "Paste", tint = MaterialTheme.colorScheme.primary)
+                                    Spacer(modifier = Modifier.height(24.dp))
+                                    Text("Ready to Download?", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        "Paste a YouTube link or search for any video above to get started.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        textAlign = TextAlign.Center,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        lineHeight = 22.sp
+                                    )
                                 }
                             }
                         }
-                    )
+                    }
                 }
 
-                AnimatedVisibility(visible = state.urlError != null) {
-                    Text(
-                        text = state.urlError ?: "",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(top = 8.dp, start = 8.dp).fillMaxWidth()
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                AnimatedVisibility(visible = state.videoMetadata == null && state.playlistMetadata == null) {
-                    Button(
-                        onClick = {
-                            keyboardController?.hide()
-                            viewModel.loadVideoInfo(state.urlInput)
-                        },
+                // ─── Search Results (LazyColumn overlay) ─────────────────────────
+                if (state.searchResults.isNotEmpty() || state.searchError != null) {
+                    LazyColumn(
+                        state = rememberLazyListState(),
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp, pressedElevation = 2.dp),
-                        enabled = !state.isLoading && state.urlInput.isNotBlank()
+                            .fillMaxSize()
+                            .padding(top = 88.dp) // Below the search bar
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(bottom = 120.dp)
                     ) {
-                        if (state.isLoading) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text("Fetching Magic...", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                        } else {
-                            Text("Get Video Info", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        items(state.searchResults, key = { it.url }) { result ->
+                            SearchResultCard(
+                                result = result,
+                                onClick = {
+                                    keyboardController?.hide()
+                                    viewModel.onSearchResultClicked(result)
+                                }
+                            )
+                        }
+
+                        // Load more button / loading indicator
+                        if (state.searchNextPage != null) {
+                            item {
+                                if (state.isLoadingMore) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    }
+                                } else {
+                                    TextButton(
+                                        onClick = { viewModel.loadMoreSearchResults() },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("Load more results")
+                                    }
+                                }
+                            }
+                        }
+
+                        // Search error
+                        state.searchError?.let { error ->
+                            item {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.errorContainer
+                                    )
+                                ) {
+                                    Text(
+                                        text = error,
+                                        modifier = Modifier.padding(16.dp),
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
                         }
                     }
                 }
 
-                AnimatedVisibility(
-                    visible = state.videoMetadata == null && state.playlistMetadata == null && !state.isLoading,
-                    enter = fadeIn(), exit = fadeOut()
-                ) {
+                // ─── Video/Playlist Metadata (scrollable Column overlay) ────────
+                if (state.videoMetadata != null || state.playlistMetadata != null) {
                     Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 48.dp)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                            .padding(32.dp)
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp)
+                            .padding(top = 88.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(72.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Rounded.RocketLaunch, contentDescription = null, modifier = Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
+                        state.videoMetadata?.let { metadata ->
+                            VideoCard(
+                                metadata = metadata,
+                                onDownloadClick = { viewModel.showFormatDialog() }
+                            )
                         }
-                        Spacer(modifier = Modifier.height(24.dp))
-                        Text("Ready to Download?", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            "Tap the red button to open YouTube, grab a link, and paste it above to get started.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            textAlign = TextAlign.Center,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            lineHeight = 22.sp
-                        )
+
+                        state.playlistMetadata?.let { playlist ->
+                            PlaylistCard(
+                                metadata = playlist,
+                                onDownloadClick = { viewModel.showPlaylistFormatDialog() }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(120.dp))
                     }
                 }
-
-                state.videoMetadata?.let { metadata ->
-                    Spacer(modifier = Modifier.height(16.dp))
-                    VideoCard(
-                        metadata = metadata,
-                        onDownloadClick = { viewModel.showFormatDialog() }
-                    )
-                }
-
-                state.playlistMetadata?.let { playlist ->
-                    Spacer(modifier = Modifier.height(16.dp))
-                    PlaylistCard(
-                        metadata = playlist,
-                        onDownloadClick = { viewModel.showPlaylistFormatDialog() }
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(120.dp))
             }
         }
 

@@ -4,6 +4,7 @@ import com.engfred.yvd.common.Resource
 import com.engfred.yvd.domain.model.AudioContainer
 import com.engfred.yvd.domain.model.DownloadStatus
 import com.engfred.yvd.domain.model.PlaylistMetadata
+import com.engfred.yvd.domain.model.SearchResult
 import com.engfred.yvd.domain.model.VideoMetadata
 import kotlinx.coroutines.flow.Flow
 
@@ -29,4 +30,13 @@ interface YoutubeRepository {
     ): Flow<DownloadStatus>
 
     fun getPlaylistMetadata(url: String): Flow<Resource<PlaylistMetadata>>
+
+    /** Search YouTube for [query] and return the first page of results. */
+    fun search(query: String): Flow<Resource<List<SearchResult>>>
+
+    /** Load the next page of results for an ongoing search. */
+    fun searchNextPage(query: String, nextPage: Any?): Flow<Resource<Pair<List<SearchResult>, Any?>>>
+
+    /** Return autocomplete suggestions for a partial [query]. */
+    fun getSearchSuggestions(query: String): Flow<Resource<List<String>>>
 }

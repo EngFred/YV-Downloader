@@ -71,7 +71,8 @@
 
 # ─── FFmpegKit (MP3 conversion via libmp3lame) ─────────────────────────────────
 -keep class com.arthenica.ffmpegkit.** { *; }
--dontwarn com.arthenica.ffmpegkit.**
+-keep class com.arthenica.smartexception.** { *; }
+-dontwarn com.arthenica.**
 -dontwarn org.brotli.
 
 # ─── Kotlin Serialization (if used anywhere) ──────────────────────────────────

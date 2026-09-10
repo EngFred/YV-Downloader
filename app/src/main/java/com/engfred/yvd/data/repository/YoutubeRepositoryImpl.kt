@@ -14,8 +14,10 @@ import com.engfred.yvd.data.network.DownloaderImpl
 import com.engfred.yvd.domain.model.AudioContainer
 import com.engfred.yvd.domain.model.AudioFormat
 import com.engfred.yvd.domain.model.DownloadStatus
+import com.engfred.yvd.domain.model.InfoType
 import com.engfred.yvd.domain.model.PlaylistMetadata
 import com.engfred.yvd.domain.model.PlaylistVideoItem
+import com.engfred.yvd.domain.model.SearchResult
 import com.engfred.yvd.domain.model.VideoFormat
 import com.engfred.yvd.domain.model.VideoMetadata
 import com.engfred.yvd.domain.repository.YoutubeRepository
@@ -38,9 +40,16 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.schabi.newpipe.extractor.Image
+import org.schabi.newpipe.extractor.InfoItem
+import org.schabi.newpipe.extractor.Page
 import org.schabi.newpipe.extractor.ServiceList
+import org.schabi.newpipe.extractor.channel.ChannelInfoItem
+import org.schabi.newpipe.extractor.playlist.PlaylistInfoItem
+import org.schabi.newpipe.extractor.search.SearchExtractor
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor
 import org.schabi.newpipe.extractor.stream.Stream
+import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import org.schabi.newpipe.extractor.stream.VideoStream
 import java.io.File
 import java.io.FileOutputStream
@@ -1055,6 +1064,108 @@ class YoutubeRepositoryImpl @Inject constructor(
             }
             else -> throw Exception("Unknown quality descriptor: $formatId")
         }
+    }
+
+    // ─── YouTube Search ────────────────────────────────────────────────────────
+
+    override fun search(query: String): Flow<Resource<List<SearchResult>>> = flow {
+        Log.d(TAG, "Searching YouTube: $query")
+        emit(Resource.Loading())
+        try {
+            val extractor: SearchExtractor =
+                ServiceList.YouTube.getSearchExtractor(query)
+            extractor.fetchPage()
+
+            val initialPage = extractor.getInitialPage()
+            val results = initialPage.items.mapNotNull { it.toSearchResult() }
+            emit(Resource.Success(results))
+        } catch (e: Exception) {
+            Log.e(TAG, "Search failed: ${e.message}", e)
+            emit(Resource.Error("Search failed: ${e.localizedMessage}"))
+        }
+    }.flowOn(Dispatchers.IO)
+
+    override fun searchNextPage(
+        query: String,
+        nextPage: Any?
+    ): Flow<Resource<Pair<List<SearchResult>, Any?>>> = flow {
+        if (nextPage == null || nextPage !is Page) {
+            emit(Resource.Success(Pair(emptyList(), null)))
+            return@flow
+        }
+        emit(Resource.Loading())
+        try {
+            val extractor: SearchExtractor =
+                ServiceList.YouTube.getSearchExtractor(query)
+            extractor.fetchPage()
+
+            val page = extractor.getPage(nextPage)
+            val results = page.items.mapNotNull { it.toSearchResult() }
+            val nextContinuation: Any? = if (page.hasNextPage()) page.nextPage else null
+            emit(Resource.Success(Pair(results, nextContinuation)))
+        } catch (e: Exception) {
+            Log.e(TAG, "Search pagination failed: ${e.message}", e)
+            emit(Resource.Error("Failed to load more results: ${e.localizedMessage}"))
+        }
+    }.flowOn(Dispatchers.IO)
+
+    override fun getSearchSuggestions(query: String): Flow<Resource<List<String>>> = flow {
+        emit(Resource.Loading())
+        try {
+            val suggestions = ServiceList.YouTube.suggestionExtractor
+                .suggestionList(query)
+            emit(Resource.Success(suggestions))
+        } catch (e: Exception) {
+            Log.w(TAG, "Suggestions failed: ${e.message}")
+            emit(Resource.Success(emptyList()))
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /** Map a NewPipe [InfoItem] to our domain [SearchResult]. */
+    private fun InfoItem.toSearchResult(): SearchResult? {
+        return when (this) {
+            is StreamInfoItem -> SearchResult(
+                url = url,
+                title = name ?: "",
+                thumbnailUrl = thumbnails
+                    .maxByOrNull { it.width }?.url ?: "",
+                duration = formatDuration(duration),
+                uploaderName = uploaderName ?: "",
+                viewCount = viewCount,
+                infoType = InfoType.VIDEO
+            )
+            is ChannelInfoItem -> SearchResult(
+                url = url,
+                title = name ?: "",
+                thumbnailUrl = thumbnails
+                    .maxByOrNull { it.width }?.url ?: "",
+                duration = "",
+                uploaderName = "",
+                viewCount = subscriberCount,
+                infoType = InfoType.CHANNEL
+            )
+            is PlaylistInfoItem -> SearchResult(
+                url = url,
+                title = name ?: "",
+                thumbnailUrl = thumbnails
+                    .maxByOrNull { it.width }?.url ?: "",
+                duration = "",
+                uploaderName = uploaderName ?: "",
+                viewCount = streamCount,
+                infoType = InfoType.PLAYLIST
+            )
+            else -> null
+        }
+    }
+
+    /** Format a duration in seconds to "mm:ss" or "hh:mm:ss". */
+    private fun formatDuration(seconds: Long): String {
+        if (seconds < 0) return ""
+        val h = seconds / 3600
+        val m = (seconds % 3600) / 60
+        val s = seconds % 60
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, s)
+        else String.format("%d:%02d", m, s)
     }
 
     // ─── Constants ────────────────────────────────────────────────────────────
