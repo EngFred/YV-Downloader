@@ -40,6 +40,10 @@ class MainActivity : ComponentActivity() {
     // State variable to track the last clipboard text we processed
     private var lastProcessedClipboardText: String? = null
 
+    // Once the user has manually interacted with the search field (typed, cleared, etc.)
+    // we stop auto-injecting clipboard URLs so we don't overwrite their input.
+    private var hasInteractedWithInput = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
@@ -134,6 +138,8 @@ class MainActivity : ComponentActivity() {
         }
 
         handleIncomingIntent(intent)
+
+        homeViewModel.onUserInputInteraction = { hasInteractedWithInput = true }
     }
 
     override fun onResume() {
@@ -155,12 +161,16 @@ class MainActivity : ComponentActivity() {
 
             // Only trigger if the clipboard link is completely different from the one currently in the search bar.
             // This prevents the infinite dialog loop when bottom sheets close and the window regains focus.
+            // Also skip if the user has already interacted (typed/cleared) — we don't want to
+            // overwrite their input every time the window regains focus (e.g. after a download).
             if (
+                !hasInteractedWithInput &&
                 UrlValidator.isValidYouTubeUrl(sanitizedClip) &&
                 clip != lastProcessedClipboardText &&
                 sanitizedClip != currentInput
             ) {
                 lastProcessedClipboardText = clip // Remember this link
+                hasInteractedWithInput = true
                 homeViewModel.handleIncomingUrl(sanitizedClip)
             }
         }

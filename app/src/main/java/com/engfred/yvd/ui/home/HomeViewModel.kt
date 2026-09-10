@@ -82,6 +82,9 @@ class HomeViewModel @Inject constructor(
     private var searchJob: Job? = null
     private var suggestionJob: Job? = null
 
+    /** Set by the Activity so it can skip auto-injecting clipboard URLs after user interaction. */
+    var onUserInputInteraction: (() -> Unit)? = null
+
     val currentTheme = themeRepository.theme.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -110,6 +113,7 @@ class HomeViewModel @Inject constructor(
     // ─── URL Input ─────────────────────────────────────────────────────────────
 
     fun onUrlInputChanged(newUrl: String) {
+        onUserInputInteraction?.invoke()
         _state.update {
             it.copy(
                 urlInput = newUrl,
