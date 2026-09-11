@@ -59,4 +59,21 @@ object UrlValidator {
             "https://$trimmed"
         } else trimmed
     }
+
+    /**
+     * Converts a playlist embedded in a watch URL to the canonical playlist URL.
+     *
+     * YouTube "Mix" results commonly use a URL such as
+     * `watch?v=<videoId>&list=RD<videoId>`.  That is a playlist result, but
+     * NewPipe's playlist extractor only accepts the `/playlist?list=...` form.
+     */
+    fun toCanonicalPlaylistUrl(url: String): String? {
+        val listId = Regex("[?&]list=([A-Za-z0-9_-]+)")
+            .find(url.trim())
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: return null
+
+        return "https://www.youtube.com/playlist?list=$listId"
+    }
 }

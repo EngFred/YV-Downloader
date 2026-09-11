@@ -24,14 +24,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.engfred.yvd.domain.model.FormatSelection
@@ -49,8 +53,10 @@ fun HomeScreen(
 
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val snackbarHostState = remember { SnackbarHostState() }
+    val searchFieldFocusRequester = remember { FocusRequester() }
 
     // State to pause downloads while we ask for permissions or data warnings
     var pendingSingleFormat by remember { mutableStateOf<FormatSelection?>(null) }
@@ -144,7 +150,11 @@ fun HomeScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 16.dp),
+                        .padding(horizontal = 16.dp)
+                        // Search and metadata are drawn as full-screen sibling layers below.
+                        // Keep this layer above them so the input and its clear action always
+                        // receive taps after returning from Downloads.
+                        .zIndex(1f),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Spacer(modifier = Modifier.height(8.dp))
@@ -161,7 +171,9 @@ fun HomeScreen(
                             value = state.urlInput,
                             onValueChange = { viewModel.onUrlInputChanged(it) },
                             placeholder = { Text("Paste a link or search YouTube...", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFieldFocusRequester),
                             singleLine = true,
                             colors = TextFieldDefaults.colors(
                                 focusedContainerColor = Color.Transparent,
@@ -173,13 +185,18 @@ fun HomeScreen(
                             trailingIcon = {
                                 Row {
                                     if (state.urlInput.isNotBlank()) {
-                                        IconButton(onClick = { viewModel.onUrlInputChanged("") }) {
+                                        IconButton(onClick = {
+                                            viewModel.onUrlInputChanged("")
+                                            searchFieldFocusRequester.requestFocus()
+                                            keyboardController?.show()
+                                        }) {
                                             Icon(Icons.Rounded.Clear, contentDescription = "Clear")
                                         }
                                     }
                                     IconButton(onClick = {
                                         val clip = clipboardManager.getText()?.text
                                         if (!clip.isNullOrBlank()) {
+                                            focusManager.clearFocus()
                                             keyboardController?.hide()
                                             viewModel.loadVideoInfo(clip)
                                         }
@@ -197,11 +214,13 @@ fun HomeScreen(
                         SearchSuggestions(
                             suggestions = state.searchSuggestions,
                             onSuggestionClick = { suggestion ->
+                                focusManager.clearFocus()
                                 keyboardController?.hide()
                                 viewModel.onUrlInputChanged(suggestion)
                                 viewModel.loadVideoInfo(suggestion)
                             },
                             onRecentClick = { suggestion ->
+                                focusManager.clearFocus()
                                 keyboardController?.hide()
                                 viewModel.onUrlInputChanged(suggestion)
                                 viewModel.loadVideoInfo(suggestion)
@@ -225,6 +244,7 @@ fun HomeScreen(
                         Column(modifier = Modifier.padding(top = 16.dp)) {
                             Button(
                                 onClick = {
+                                    focusManager.clearFocus()
                                     keyboardController?.hide()
                                     viewModel.loadVideoInfo(state.urlInput)
                                 },
@@ -300,6 +320,7 @@ fun HomeScreen(
                             SearchResultCard(
                                 result = result,
                                 onClick = {
+                                    focusManager.clearFocus()
                                     keyboardController?.hide()
                                     viewModel.onSearchResultClicked(result)
                                 }

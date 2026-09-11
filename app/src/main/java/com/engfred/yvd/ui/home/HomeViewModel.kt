@@ -14,6 +14,7 @@ import com.engfred.yvd.domain.model.AppTheme
 import com.engfred.yvd.domain.model.AudioContainer
 import com.engfred.yvd.domain.model.DownloadQueueStatus
 import com.engfred.yvd.domain.model.FormatSelection
+import com.engfred.yvd.domain.model.InfoType
 import com.engfred.yvd.domain.model.PlaylistMetadata
 import com.engfred.yvd.domain.model.SearchResult
 import com.engfred.yvd.domain.model.VideoMetadata
@@ -81,6 +82,7 @@ class HomeViewModel @Inject constructor(
 
     private var searchJob: Job? = null
     private var suggestionJob: Job? = null
+    private var metadataJob: Job? = null
 
     /** Set by the Activity so it can skip auto-injecting clipboard URLs after user interaction. */
     var onUserInputInteraction: (() -> Unit)? = null
@@ -114,10 +116,17 @@ class HomeViewModel @Inject constructor(
 
     fun onUrlInputChanged(newUrl: String) {
         onUserInputInteraction?.invoke()
+        // A response for the previously selected item must not restore its card
+        // after the user has cleared or replaced the input.
+        metadataJob?.cancel()
+        searchJob?.cancel()
         _state.update {
             it.copy(
                 urlInput = newUrl,
                 urlError = null,
+                isLoading = false,
+                isSearching = false,
+                isLoadingMore = false,
                 videoMetadata = if (newUrl.isBlank()) null else it.videoMetadata,
                 playlistMetadata = if (newUrl.isBlank()) null else it.playlistMetadata,
                 isPlaylistUrl = false,
@@ -140,6 +149,7 @@ class HomeViewModel @Inject constructor(
     fun loadVideoInfo(url: String) {
         // Cancel any pending suggestion requests
         suggestionJob?.cancel()
+        metadataJob?.cancel()
 
         val inputType = UrlValidator.classifyInput(url)
 
@@ -165,6 +175,7 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun loadSingleVideoInfo(url: String) {
+        metadataJob?.cancel()
         if (!UrlValidator.isValidYouTubeUrl(url)) {
             _state.update {
                 it.copy(urlError = "Please paste a valid YouTube link (youtube.com or youtu.be)")
@@ -180,7 +191,7 @@ class HomeViewModel @Inject constructor(
             )
         }
 
-        repository.getVideoMetadata(url)
+        metadataJob = repository.getVideoMetadata(url)
             .onEach { result ->
                 when (result) {
                     is Resource.Loading -> _state.update { it.copy(isLoading = true) }
@@ -192,13 +203,14 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun loadPlaylistInfo(url: String) {
+        metadataJob?.cancel()
         _state.update {
             it.copy(
                 isLoading = true, urlError = null, error = null,
                 videoMetadata = null, playlistMetadata = null, isPlaylistUrl = true
             )
         }
-        repository.getPlaylistMetadata(url)
+        metadataJob = repository.getPlaylistMetadata(url)
             .onEach { result ->
                 when (result) {
                     is Resource.Loading -> _state.update { it.copy(isLoading = true) }
@@ -471,17 +483,29 @@ class HomeViewModel @Inject constructor(
     }
 
     fun onSearchResultClicked(result: SearchResult) {
-        // Clear search state and load the selected video's full metadata
+        val selectedUrl = if (result.infoType == InfoType.PLAYLIST) {
+            UrlValidator.toCanonicalPlaylistUrl(result.url) ?: UrlValidator.sanitize(result.url)
+        } else {
+            UrlValidator.sanitize(result.url)
+        }
+
+        // Clear search state and load the selected item's full metadata. Playlist
+        // search results can arrive as watch URLs with a `list` query parameter;
+        // use their canonical playlist URL so NewPipe selects its playlist extractor.
         _state.update {
             it.copy(
-                urlInput = result.url,
+                urlInput = selectedUrl,
                 searchResults = emptyList(),
                 searchSuggestions = emptyList(),
                 searchNextPage = null,
                 searchError = null
             )
         }
-        loadSingleVideoInfo(result.url)
+        if (result.infoType == InfoType.PLAYLIST) {
+            loadPlaylistInfo(selectedUrl)
+        } else {
+            loadSingleVideoInfo(selectedUrl)
+        }
     }
 
     fun clearSearchResults() {
